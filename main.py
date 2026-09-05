@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 import yt_dlp
@@ -28,48 +29,50 @@ def download_media(url: str, download_folder: str = "downloads"):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         filename = ydl.prepare_filename(info)
-        base, _ = os.path.splitext(filename)
-        final_filename = base + ".mp4"
-        if os.path.exists(final_filename):
-            return final_filename
+        if not filename.endswith('.mp4'):
+            filename = os.path.splitext(filename)[0] + '.mp4'
         return filename
 
 @dp.message(CommandStart())
-async def start_cmd(message: types.Message):
-    await message.answer(
-        "👋 Salom! \n\nMenga **Instagram**, **YouTube**, yoki **TikTok** videosining havolasini yuboring, "
-        "men uni sizga yuklab beraman!"
-    )
+async def send_welcome(message: types.Message):
+    await message.answer("Salom! Menga Instagram, TikTok yoki YouTube havolasini yuboring.")
 
-@dp.message(F.text.startswith("http"))
-async def handle_link(message: types.Message):
-    status_msg = await message.answer("⏳ Media qidirilmoqda va yuklanmoqda. Iltimos, kuting...")
+@dp.message(F.text)
+async def handle_message(message: types.Message):
     url = message.text.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await message.answer("Iltimos, to'g'ri havola yuboring.")
+        return
 
+    msg = await message.answer("Video yuklanmoqda, kuting...")
     try:
         loop = asyncio.get_event_loop()
         file_path = await loop.run_in_executor(None, download_media, url)
-
-        file_size = os.path.getsize(file_path) / (1024 * 1024)
-        if file_size > 50:
-            await status_msg.edit_text("❌ Fayl hajmi 50MB dan katta. Telegram yubora olmaydi.")
+        
+        video_file = types.FSInputFile(file_path)
+        await message.answer_video(video_file)
+        
+        if os.path.exists(file_path):
             os.remove(file_path)
-            return
-
-        await status_msg.edit_text("⬆️ Tayyor! Telegram'ga yuklanmoqda...")
-        
-        video = types.FSInputFile(file_path)
-        await message.answer_video(video=video, caption="@Helpdowloads_bot orqali yuklab olindi 🚀")
-        
-        os.remove(file_path)
-        await status_msg.delete()
-
+        await msg.delete()
     except Exception as e:
         logging.error(f"Xatolik: {e}")
-        await status_msg.edit_text("❌ Yuklab olishda xatolik yuz berdi. Havolani tekshirib qaytadan urinib ko'ring.")
+        await msg.edit_text("Videoni yuklab bo'lmadi. Havolani tekshirib qayta urinib ko'ring.")
+
+async def start_dummy_server():
+    async def handle(request):
+        return web.Response(text="Bot runs 24/7!")
+    
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
 
 async def main():
-    print("Bot muvaffaqiyatli ishga tushdi!")
+    await start_dummy_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
