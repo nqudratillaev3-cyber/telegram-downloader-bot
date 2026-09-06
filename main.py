@@ -1,109 +1,90 @@
-import os
-import logging
 import asyncio
+import logging
+import os
+import io
+import urllib.parse
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-import aiohttp
+from aiogram.types import BufferedInputFile
+from groq import Groq
 
-# Logging sozlamasi
+# Logging sozlamalari
 logging.basicConfig(level=logging.INFO)
 
-# API Kalitlar
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-# Groq API kalit to'g'ridan-to'g'ri biriktirildi
-GROQ_API_KEY = "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"
+# Direct credentials (Environment variable xatolarini oldini olish uchun)
+BOT_TOKEN = "8201911449:AAEkpCTEJc9aki4mxTLpDh4DU0A02rnNfcI"
+GROQ_API_KEY = "gsk_..." # O'zingizning Groq API kalitingizni shu yerda saqlang
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Groq AI orqali matnli javob olish funksiyasi
-async def fetch_groq_ai(prompt: str) -> str:
-    if not GROQ_API_KEY:
-        return "⚠️ GROQ_API_KEY sozlanmagan!"
-    
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Siz aqlli, xushmuomala va har qanday savolga aniq javob beradigan Telegram AI yordamchisiz. Javoblarni o'zbek tilida, tushunarli va chiroyli formatda bering."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers, timeout=30) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data['choices'][0]['message']['content']
-                else:
-                    err_text = await resp.text()
-                    logging.error(f"Groq API Error: {resp.status} - {err_text}")
-                    return "⚠️ AI serverida vaqtinchalik xatolik yuz berdi. Iltimos, birozdan so'ng qayta urinib ko'ring."
-    except Exception as e:
-        logging.error(f"Groq Request Exception: {e}")
-        return "⚠️ AI serveriga ulanishda xatolik yuz berdi."
+# Groq mijozini sozlash (agar API key mavjud bo'lsa)
+try:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+except Exception as e:
+    logging.error(f"Groq initialization error: {e}")
+    groq_client = None
 
 # /start komandasi
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
-    welcome_text = (
-        "<b>Salom! Men ko'p funksiyali AI va Downloader botman!</b> 🤖🚀\n\n"
-        "<b>Imkoniyatlarim:</b>\n"
-        "1. 📥 <b>Media yuklash:</b> Instagram, TikTok yoki YouTube havolasini yuboring.\n"
-        "2. 💬 <b>AI Chat:</b> Har qanday savolingizni matn ko'rinishida yozing.\n"
-        "3. 🎨 <b>Rasm generatsiya:</b> <code>/image rasm matni</code> deb yuboring.\n"
-        "<i>Masalan: /image kosmosda uchayotgan futuristik avtomobil</i>"
+    await message.answer(
+        "Salom! Men sizning ko'p funksiyali AI yordamchingizman.\n\n"
+        "✨ **Imkoniyatlar:**\n"
+        "• AI bilan muloqot (Llama 3.3 70B)\n"
+        "• Rasm generatsiya qilish: `/image <tasvir tavsifi>`\n\n"
+        "Manga shunchaki savolingizni yuboring!"
     )
-    await message.answer(welcome_text)
 
-# /image komandasi
+# /image komandasi - Pollinations AI orqali rasm yaratish
 @dp.message(Command("image"))
-async def generate_image_cmd(message: types.Message):
+async def generate_image(message: types.Message):
     prompt = message.text.replace("/image", "").strip()
     if not prompt:
-        await message.answer("⚠️ Iltimos, rasm tavsifini kiriting.\n<i>Masalan: /image kosmosdagi shahar</i>")
+        await message.answer("Iltimos, rasm tavsifini kiriting. Masalan: `/image kosmosdagi oltin mashina`")
         return
 
-    msg = await message.answer("🎨 Rasm tayyorlanmoqda, iltimos kuting...")
-    
-    image_url = f"https://pollinations.ai/p/{prompt.replace(' ', '%20')}?width=1024&height=1024&seed=42"
+    msg = await message.answer("🎨 Rasm chizilmoqda, biroz kuting...")
     
     try:
-        await message.answer_photo(photo=image_url, caption=f"✨ <b>Rasm tavsifi:</b> {prompt}")
+        encoded_prompt = urllib.parse.quote(prompt)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&nologo=true"
+        
+        await message.answer_photo(photo=image_url, caption=f"🖼 **Natija:** {prompt}")
         await msg.delete()
     except Exception as e:
-        await msg.edit_text("⚠️ Rasm yaratishda xatolik yuz berdi. Qaytadan urinib ko'ring.")
+        logging.error(f"Image generation error: {e}")
+        await msg.edit_text("❌ Rasm yaratishda xatolik yuz berdi. Qayta urinib ko'ring.")
 
-# Oddiy matnli xabarlar (AI Chat)
+# Oddiy matnli xabarlar uchun Groq AI javobi
 @dp.message(F.text)
-async def ai_chat_handler(message: types.Message):
-    # Agar xabar havola (URL) bo'lsa, media yuklovchi qismga o'tishi uchun tekshiruv
-    if message.text.startswith("http://") or message.text.startswith("https://"):
-        await message.answer("📥 Media yuklash servisi hozircha o'rnatilmoqda...")
+async def ai_chat(message: types.Message):
+    if not groq_client:
+        await message.answer(" Groq AI kaliti sozlanmagan.")
         return
 
-    # Typing indikatori
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    
-    # Groq AI ga so'rov yuborish
-    response = await fetch_groq_ai(message.text)
-    await message.answer(response)
+
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "Siz foydali, aqlli va xushfe'l Telegram AI yordamchisiz. O'zbek tilida aniq va ravon javob bering."},
+                {"role": "user", "content": message.text}
+            ],
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        response_text = completion.choices[0].message.content
+        await message.answer(response_text)
+    except Exception as e:
+        logging.error(f"Groq AI error: {e}")
+        await message.answer("🤖 AI javob qaytarishda xatolik yuz berdi.")
 
 async def main():
     logging.info("Bot ishga tushmoqda...")
+    # Eski update'larni o'chirish (so'rovlar to'silib qolmasligi uchun)
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
