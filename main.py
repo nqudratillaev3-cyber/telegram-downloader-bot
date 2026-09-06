@@ -41,7 +41,7 @@ async def start_handler(message: types.Message):
     welcome_text = (
         "<b>Salom! Men sizning ko'p funksiyali AI yordamchingizman.</b>\n\n"
         "✨ <b>Imkoniyatlar:</b>\n"
-        "• AI bilan muloqot (Llama 3)\n"
+        "• AI bilan muloqot\n"
         "• Rasm generatsiya qilish: <code>/image &lt;tasvir tavsifi&gt;</code>\n\n"
         "Menga shunchaki savolingizni yuboring!"
     )
@@ -70,8 +70,9 @@ async def image_handler(message: types.Message):
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
     try:
+        # Hozirda faol bo'lgan rasmiy model
         response = await groq_client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": "Siz foydali, aqlli va xushmuomala AI yordamchisiz. Foydalanuvchiga aniq va o'zbek tilida javob bering."},
                 {"role": "user", "content": message.text}
@@ -83,7 +84,6 @@ async def ai_chat_handler(message: types.Message):
         await message.answer(answer)
     except Exception as e:
         logging.error(f"Groq AI error: {e}")
-        # Xato bergan taqdirda xatoning matnini Telegram'ga chiqaradi
         await message.answer(f"🤖 AI xatoligi: {e}")
 
 # --- ASOSIY ISHGA TUSHIRISH ---
