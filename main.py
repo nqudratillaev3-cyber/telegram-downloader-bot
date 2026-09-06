@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import os
-import httpx
+import urllib.parse
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiohttp import web
-from groq import Groq
+from groq import AsyncGroq
 
 # Logging sozlamalari
 logging.basicConfig(level=logging.INFO)
@@ -15,10 +15,10 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Bot va Groq klientlari
+# Bot va AsyncGroq klientlari
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-groq_client = Groq(api_key=GROQ_API_KEY)
+groq_client = AsyncGroq(api_key=GROQ_API_KEY)
 
 # --- RENDER PORT SERVER FIX ---
 async def handle(request):
@@ -57,7 +57,8 @@ async def image_handler(message: types.Message):
 
     await message.answer("🎨 Rasm tayyorlanmoqda, kuting...")
     
-    encoded_prompt = httpx.URL(prompt).raw_path.decode('utf-8')
+    # URL to'g'ri formatlash
+    encoded_prompt = urllib.parse.quote(prompt)
     image_url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&seed=42"
     
     try:
@@ -66,11 +67,12 @@ async def image_handler(message: types.Message):
         logging.error(f"Image Error: {e}")
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
 
-# AI Matn Chat (Groq AI)
+# AI Matn Chat (Groq Async AI)
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
     try:
-        response = groq_client.chat.completions.create(
+        # await bilan asinxron chaqirish
+        response = await groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": "Siz foydali, aqlli va xushmuomala AI yordamchisiz. Foydalanuvchiga aniq va o'zbek tilida javob bering."},
