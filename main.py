@@ -43,11 +43,12 @@ async def auto_fix_and_push(error_message: str):
         return False
 
     err_str = str(error_message).upper()
-    if any(k in err_str for k in ["RESOURCE_EXHAUSTED", "429", "404", "QUOTA"]):
+    # API limit, server bandligi yoki kvota xatolari bo'lsa Auto-Fix ishlamaydi
+    if any(k in err_str for k in ["RESOURCE_EXHAUSTED", "429", "503", "UNAVAILABLE", "404", "QUOTA"]):
         return False
 
     try:
-        g = Github(GITHUB_TOKEN)
+        g = Github(auth=github.Auth.Token(GITHUB_TOKEN)) if hasattr(github, 'Auth') else Github(GITHUB_TOKEN)
         repo = g.get_repo(GITHUB_REPO)
         contents = repo.get_contents("main.py")
         current_code = contents.decoded_content.decode("utf-8")
@@ -86,7 +87,7 @@ def download_video(url: str, output_path: str = "downloaded_video.mp4"):
         'outtmpl': output_path,
         'quiet': True,
         'no_warnings': True,
-        'max_filesize': 50 * 1024 * 1024  # Telegram limit: 50MB
+        'max_filesize': 50 * 1024 * 1024
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
@@ -126,11 +127,10 @@ async def image_handler(message: types.Message):
 async def main_handler(message: types.Message):
     text = message.text.strip()
     
-    # HTTP/HTTPS havolasi bor-yo'qligini aniqlash
     url_pattern = re.compile(r'https?://[^\s]+')
     urls = url_pattern.findall(text)
 
-    # 1. Agar foydalanuvchi havola (Link) yuborgan bo'lsa -> Downloader ishlaydi
+    # 1. Havola yuborilgan bo'lsa
     if urls:
         url = urls[0]
         status_msg = await message.answer("📥 Video yuklanmoqda, biroz kuting...")
@@ -147,13 +147,13 @@ async def main_handler(message: types.Message):
             if os.path.exists(file_path):
                 os.remove(file_path)
             return
-        except Exception as e:
+        except Exception:
             if os.path.exists(file_path):
                 os.remove(file_path)
             await status_msg.edit_text("❌ Ushbu havoladan videoni yuklab bo'lmadi yoki fayl hajmi juda katta (50MB+).")
             return
 
-    # 2. Oddiy matn bo'lsa -> Gemini AI javob beradi
+    # 2. AI Chat
     system_instruction = "You are a helpful AI assistant. Always reply in the user's language (Uzbek, Russian, or English)."
     try:
         response = ai_client.models.generate_content(
@@ -167,8 +167,8 @@ async def main_handler(message: types.Message):
         
         full_err_text = f"{str(e)} {repr(e)} {error_trace}".upper()
         
-        if any(keyword in full_err_text for keyword in ["429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE_LIMIT", "TOO MANY REQUESTS"]):
-            await message.answer("⏳ AI serverlari vaqtincha band yoki bepul API limiti to'ldi. 1-2 daqiqadan so'ng qayta yozib ko'ring.")
+        if any(keyword in full_err_text for keyword in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "QUOTA", "RATE_LIMIT", "TOO MANY REQUESTS"]):
+            await message.answer("⏳ Google AI serverlarida yuklama yuqori yoki vaqtincha band. 1-2 daqiqadan so'ng qayta yozib ko'ring.")
             return
 
         status_msg = await message.answer("⚠️ Botda koddagi xatolik aniqlandi. Auto-Fix ishga tushdi...")
