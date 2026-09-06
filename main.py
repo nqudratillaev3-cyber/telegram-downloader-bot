@@ -66,25 +66,37 @@ async def image_handler(message: types.Message):
         logging.error(f"Image Error: {e}")
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
 
-# AI Matn Chat (Groq Async AI)
+# AI Matn Chat (Groq Async AI - Zaxira modellar bilan)
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
-    try:
-        # Hozirda faol bo'lgan rasmiy model
-        response = await groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": "Siz foydali, aqlli va xushmuomala AI yordamchisiz. Foydalanuvchiga aniq va o'zbek tilida javob bering."},
-                {"role": "user", "content": message.text}
-            ],
-            temperature=0.7,
-            max_tokens=1024
-        )
-        answer = response.choices[0].message.content
-        await message.answer(answer)
-    except Exception as e:
-        logging.error(f"Groq AI error: {e}")
-        await message.answer(f"🤖 AI xatoligi: {e}")
+    models_to_try = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768"
+    ]
+    
+    success = False
+    for model_name in models_to_try:
+        try:
+            response = await groq_client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": "Siz foydali, aqlli va xushmuomala AI yordamchisiz. Foydalanuvchiga aniq va o'zbek tilida javob bering."},
+                    {"role": "user", "content": message.text}
+                ],
+                temperature=0.7,
+                max_tokens=1024
+            )
+            answer = response.choices[0].message.content
+            await message.answer(answer)
+            success = True
+            break
+        except Exception as e:
+            logging.warning(f"Model {model_name} xatosi: {e}")
+            continue
+
+    if not success:
+        await message.answer("🤖 Groq API kalitingizda yoki modellarga kirishda xatolik bor. Iltimos, console.groq.com saytidan yangi API kalit oling.")
 
 # --- ASOSIY ISHGA TUSHIRISH ---
 async def main():
