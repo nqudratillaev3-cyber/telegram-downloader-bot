@@ -8,8 +8,8 @@ from aiohttp import web
 import yt_dlp
 from google import genai
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8201911449:AAG5zn-D9seGtzK2N4RnyALMHCR3nF9jfso")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6llE7DQ0f30TrOv2kJ7HFqQlojov9qv14xuEKsEfx4pBg")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
