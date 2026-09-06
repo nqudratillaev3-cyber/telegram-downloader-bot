@@ -18,7 +18,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # Bot va Groq klientlarini retsializatsiya qilish
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-groq_client = Groq(api_key=GROQ_API_KEY)
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY")
 
 # --- RENDER PORT SCAN FIX (PORT SERVER) ---
 async def handle(request):
