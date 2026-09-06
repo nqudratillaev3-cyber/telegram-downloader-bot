@@ -37,7 +37,7 @@ async def fetch_image_bytes(prompt: str):
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=800&nologo=true"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -77,16 +77,35 @@ async def generate_image_cmd(message: types.Message):
             pass
 
 
-# Cheklovsiz AI Chat So'rovi (Pollinations Text API)
+# Cheklovsiz AI Chat So'rovi (Pollinations POST JSON Endpoint + User-Agent)
 async def fetch_ai_response(prompt_text: str):
-    encoded_prompt = urllib.parse.quote(prompt_text)
-    url = f"https://text.pollinations.ai/{encoded_prompt}?model=openai"
+    url = "https://text.pollinations.ai/"
     
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=30) as response:
-            if response.status == 200:
-                text = await response.text()
-                return text.strip()
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    models = ["openai", "mistral", "karma"]
+    
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for model in models:
+            payload = {
+                "messages": [
+                    {"role": "user", "content": prompt_text}
+                ],
+                "model": model,
+                "seed": 42
+            }
+            try:
+                async with session.post(url, json=payload, timeout=20) as response:
+                    if response.status == 200:
+                        text = await response.text()
+                        if text and text.strip():
+                            return text.strip()
+            except Exception:
+                continue
+
     return None
 
 
@@ -103,9 +122,9 @@ async def ai_chat(message: types.Message):
         if reply_text:
             await message.answer(reply_text)
         else:
-            await message.answer("⚠️ AI javob berishda vaqtinchalik uzilish bo'ldi. Qayta yozib ko'ring.")
+            await message.answer("⚠️ AI serverlarida vaqtinchalik yuklama bor. Qayta urinib ko'ring.")
     except Exception:
-        await message.answer("⚠️ Xatolik yuz berdi, iltimos qaytadan urinib ko'ring.")
+        await message.answer("⚠️ Xatolik yuz berdi, iltimos qaytadan yozib ko'ring.")
 
 
 # Health Check web serveri
