@@ -34,17 +34,18 @@ async def send_welcome(message: types.Message):
     await message.answer(welcome_text, parse_mode="HTML")
 
 
-# Rasmni Pollinations API'dan xavfsiz yuklab olish funksiyasi
+# Rasmni muqobil Pollinations serverlaridan yuklab olish funksiyasi
 async def fetch_image_bytes(prompt: str):
     encoded_prompt = urllib.parse.quote(prompt)
-    url = f"https://pollinations.ai/p/{encoded_prompt}"
+    # Ishonchli rasm URL formati
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=800&nologo=true"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
     async with aiohttp.ClientSession(headers=headers) as session:
-        async with session.get(url, timeout=30) as response:
+        async with session.get(url, timeout=40) as response:
             if response.status == 200:
                 return await response.read()
     return None
@@ -65,16 +66,15 @@ async def generate_image_cmd(message: types.Message):
         image_bytes = await fetch_image_bytes(prompt)
         
         if image_bytes:
-            # Bytes faylini Telegram tayyor ushlaydigan obyektga o'tkazish
             photo_file = BufferedInputFile(image_bytes, filename="generated_image.jpg")
             await message.answer_photo(photo=photo_file, caption=f"🖼 <b>Natija:</b> {prompt}", parse_mode="HTML")
             await msg_processing.delete()
         else:
-            await message.answer("❌ Rasm yaratishda xatolik: Serverdan javob olib bo'lmadi.")
+            await message.answer("❌ Rasm serveridan javob olib bo'lmadi. Keyinroq qayta urining.")
             await msg_processing.delete()
 
     except Exception as e:
-        await message.answer(f"❌ Rasm yuklashda kutilmagan xatolik: {e}")
+        await message.answer(f"❌ Rasm yaratishda xatolik: {e}")
         try:
             await msg_processing.delete()
         except:
@@ -114,11 +114,11 @@ async def ai_chat(message: types.Message):
     except Exception as e:
         err_str = str(e).upper()
         if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "QUOTA" in err_str:
-            await message.answer("⚠️ API limiti to'lib qoldi. Iltimos, 1 daqiqadan so'ng qayta urining.")
+            await message.answer("⚠️ Bugun AI API bepul so'rovlar limiti to'lgan. Iltimos, bir ozdan so'ng qayta urining.")
         elif "503" in err_str or "UNAVAILABLE" in err_str:
-            await message.answer("🤖 AI serverlarida vaqtinchalik juda yuqori yuklama mavjud. Bir ozdan so'ng qayta urining.")
+            await message.answer("🤖 AI serverlarida vaqtinchalik juda yuqori yuklama mavjud. Qayta urining.")
         else:
-            await message.answer("🤖 AI javob berishda vaqtinchalik xatolik yuz berdi. Iltimos, keyinroq qayta urining.")
+            await message.answer("🤖 AI javob berishda vaqtinchalik xatolik yuz berdi.")
 
 
 # Health Check web serveri
