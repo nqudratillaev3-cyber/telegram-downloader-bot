@@ -7,16 +7,17 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile
-from google import genai
+import google.generativeai as genai
 
 # Environment Variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Bot va Client obyektlari
+# Bot va AI ni sozlash
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+genai.configure(api_key=GEMINI_API_KEY)
 
 
 # /start va /help buyruqlari
@@ -34,10 +35,9 @@ async def send_welcome(message: types.Message):
     await message.answer(welcome_text, parse_mode="HTML")
 
 
-# Rasmni muqobil Pollinations serverlaridan yuklab olish funksiyasi
+# Rasmni yuklab olish funksiyasi
 async def fetch_image_bytes(prompt: str):
     encoded_prompt = urllib.parse.quote(prompt)
-    # Ishonchli rasm URL formati
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=800&nologo=true"
     
     headers = {
@@ -74,51 +74,46 @@ async def generate_image_cmd(message: types.Message):
             await msg_processing.delete()
 
     except Exception as e:
-        await message.answer(f"❌ Rasm yaratishda xatolik: {e}")
+        await message.answer(f"❌ Rasm yaratishda xatolik yuz berdi.")
         try:
             await msg_processing.delete()
         except:
             pass
 
 
-# Gemini API so'rovi (Limit va xatoliklar ushlab qolinadi)
-def generate_ai_response(prompt_text: str):
-    models = ["gemini-2.5-flash", "gemini-1.5-flash"]
-    last_error = None
-
-    for model_name in models:
+# Gemini AI So'rovi
+def ask_gemini(prompt_text: str):
+    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro']
+    
+    for model_name in models_to_try:
         try:
-            response = ai_client.models.generate_content(
-                model=model_name,
-                contents=prompt_text,
-            )
-            return response.text
-        except Exception as e:
-            last_error = e
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt_text)
+            if response and response.text:
+                return response.text
+        except Exception:
             continue
             
-    raise last_error
+    return None
 
 
 # AI Chat ishlovchisi
 @dp.message()
 async def ai_chat(message: types.Message):
+    # Agar havola (link) yuborilgan bo'lsa AI tegmaydi
     if message.text and (message.text.startswith("http") or "://" in message.text):
         return
         
     await bot.send_chat_action(message.chat.id, "typing")
 
-    try:
-        reply_text = generate_ai_response(message.text)
+    # Sinxron funksiyani asinxron ishga tushirish
+    loop = asyncio.get_event_loop()
+    reply_text = await loop.run_in_executor(None, ask_gemini, message.text)
+
+    if reply_text:
         await message.answer(reply_text)
-    except Exception as e:
-        err_str = str(e).upper()
-        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "QUOTA" in err_str:
-            await message.answer("⚠️ Bugun AI API bepul so'rovlar limiti to'lgan. Iltimos, bir ozdan so'ng qayta urining.")
-        elif "503" in err_str or "UNAVAILABLE" in err_str:
-            await message.answer("🤖 AI serverlarida vaqtinchalik juda yuqori yuklama mavjud. Qayta urining.")
-        else:
-            await message.answer("🤖 AI javob berishda vaqtinchalik xatolik yuz berdi.")
+    else:
+        await message.answer("⚠️ AI API limiti to'lgan yoki serverda yuqori yuklama bor. Iltimos, 1 minutdan so'ng qayta yozing.")
 
 
 # Health Check web serveri
