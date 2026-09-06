@@ -1,7 +1,6 @@
 import os
 import urllib.parse
 import asyncio
-import io
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -10,6 +9,7 @@ from aiogram.types import BufferedInputFile
 
 # Environment Variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 # Bot va Dispatcher
 bot = Bot(token=BOT_TOKEN)
@@ -24,20 +24,20 @@ async def send_welcome(message: types.Message):
         "Salom! Men ko'p funksiyali AI va Downloader botman! 🤖🚀\n\n"
         "Imkoniyatlarim:\n"
         "1. 📥 <b>Media yuklash:</b> Instagram, TikTok yoki YouTube havolasini yuboring.\n"
-        "2. 💬 <b>AI Chat:</b> Har qanday savolingizni matn ko'rinishida yozing (cheklovsiz).\n"
+        "2. 💬 <b>AI Chat:</b> Har qanday savolingizni matn ko'rinishida yozing.\n"
         "3. 🎨 <b>Rasm generatsiya:</b> <code>/image rasm matni</code> deb yuboring.\n"
         "<i>Masalan: /image kosmosda uchayotgan futuristik avtomobil</i>"
     )
     await message.answer(welcome_text, parse_mode="HTML")
 
 
-# Rasmni yuklab olish funksiyasi
+# Rasmni yuklab olish funksiyasi (Pollinations Image)
 async def fetch_image_bytes(prompt: str):
     encoded_prompt = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=800&nologo=true"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
     async with aiohttp.ClientSession(headers=headers) as session:
@@ -77,52 +77,30 @@ async def generate_image_cmd(message: types.Message):
             pass
 
 
-# DuckDuckGo AI Text Chat API (Cheklovsiz va IP-bloklarsiz)
-async def fetch_duckduckgo_ai(prompt_text: str):
+# Rasmiy va o'ta tezkor Groq AI Chat API
+async def fetch_groq_ai(prompt_text: str):
+    if not GROQ_API_KEY:
+        return "⚠️ GROQ_API_KEY Render Environment Variables ga qo'shilmagan!"
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "text/event-stream",
-        "x-vqd-accept": "1"
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "user", "content": prompt_text}],
+        "temperature": 0.7
     }
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        # 1-qadam: Status tokenni olish
-        async with session.get("https://duckduckgo.com/duckchat/v1/status") as resp:
-            vqd = resp.headers.get("x-vqd-4")
-            
-        if not vqd:
-            return None
-
-        # 2-qadam: Savolni yuborish
-        chat_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "x-vqd-4": vqd
-        }
-        
-        payload = {
-            "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt_text}]
-        }
-        
-        async with session.post("https://duckduckgo.com/duckchat/v1/chat", json=payload, headers=chat_headers) as resp:
-            if resp.status == 200:
-                result_text = ""
-                async for line in resp.content:
-                    decoded_line = line.decode('utf-8').strip()
-                    if decoded_line.startswith("data: "):
-                        data_str = decoded_line[6:]
-                        if data_str == "[DONE]":
-                            break
-                        import json
-                        try:
-                            data_json = json.loads(data_str)
-                            if "message" in data_json:
-                                result_text += data_json["message"]
-                        except Exception:
-                            continue
-                return result_text.strip() if result_text else None
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(url, json=payload, headers=headers, timeout=20) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data["choices"][0]["message"]["content"].strip()
+        except Exception:
+            pass
     return None
 
 
@@ -135,11 +113,11 @@ async def ai_chat(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        reply_text = await fetch_duckduckgo_ai(message.text)
+        reply_text = await fetch_groq_ai(message.text)
         if reply_text:
             await message.answer(reply_text)
         else:
-            await message.answer("⚠️ AI serverlarida vaqtinchalik yuklama bor. Iltimos qayta urinib ko'ring.")
+            await message.answer("⚠️ AI serverida vaqtinchalik xatolik yuz berdi.")
     except Exception:
         await message.answer("⚠️ Xatolik yuz berdi, iltimos qaytadan yozib ko'ring.")
 
