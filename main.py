@@ -39,8 +39,8 @@ async def auto_fix_and_push(error_message: str):
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return False
 
-    # Limit (429) yoki Model (404) xatolarida GitHub'ga fayl yozmaymiz
-    if "RESOURCE_EXHAUSTED" in error_message or "429" in error_message or "404" in error_message:
+    err_str = str(error_message).upper()
+    if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str or "404" in err_str or "QUOTA" in err_str:
         return False
 
     try:
@@ -118,21 +118,25 @@ async def ai_chat_handler(message: types.Message):
         )
         await message.answer(response.text)
     except Exception as e:
+        # Traceback orqali xatolikning to'liq matnini olamiz
         error_trace = traceback.format_exc()
+        logging.error(f"Chat error: {error_trace}")
         
-        # Agar limitga tushgan bo'lsa (429), foydalanuvchiga tushunarli xabar beramiz
-        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-            await message.answer("⏳ Bepul API limiti vaqtincha to'ldi. 1-2 daqiqadan so'ng qayta yozib ko'ring.")
+        full_err_text = f"{str(e)} {repr(e)} {error_trace}".upper()
+        
+        # Barcha turdagi API limit va kvota xatoliklarini to'liq ushlaymiz
+        if any(keyword in full_err_text for keyword in ["429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE_LIMIT", "TOO MANY REQUESTS"]):
+            await message.answer("⏳ AI serverlari vaqtincha band yoki bepul API limiti to'ldi. 1-2 daqiqadan so'ng qayta yozib ko'ring.")
             return
 
-        # Kod xatosi bo'lsa, Auto-Fix ishga tushadi
+        # Haqiqiy Python koddagi mantiqiy xatolik bo'lsagina Auto-Fix ishlaydi
         status_msg = await message.answer("⚠️ Botda koddagi xatolik aniqlandi. Auto-Fix ishga tushdi...")
         fixed = await auto_fix_and_push(error_trace)
         
         if fixed:
-            await status_msg.edit_text("🔄 Kod tuzatildi va GitHub'ga saqlandi! Render 1 daqiqada qayta deploy qiladi.")
+            await status_msg.edit_text("🔄 Kod avtomatik tuzatildi va GitHub'ga saqlandi! Render 1 daqiqada qayta deploy qiladi.")
         else:
-            await message.answer("⚠️ Serverda vaqtincha xatolik. Birozdan so'ng urinib ko'ring.")
+            await status_msg.edit_text("⚠️ Serverda vaqtincha xatolik. Birozdan so'ng urinib ko'ring.")
 
 async def main():
     await start_dummy_server()
