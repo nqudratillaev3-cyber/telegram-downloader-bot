@@ -77,35 +77,52 @@ async def generate_image_cmd(message: types.Message):
             pass
 
 
-# Cheklovsiz AI Chat So'rovi (Pollinations POST JSON Endpoint + User-Agent)
-async def fetch_ai_response(prompt_text: str):
-    url = "https://text.pollinations.ai/"
-    
+# DuckDuckGo AI Text Chat API (Cheklovsiz va IP-bloklarsiz)
+async def fetch_duckduckgo_ai(prompt_text: str):
     headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/event-stream",
+        "x-vqd-accept": "1"
     }
-    
-    models = ["openai", "mistral", "karma"]
-    
-    async with aiohttp.ClientSession(headers=headers) as session:
-        for model in models:
-            payload = {
-                "messages": [
-                    {"role": "user", "content": prompt_text}
-                ],
-                "model": model,
-                "seed": 42
-            }
-            try:
-                async with session.post(url, json=payload, timeout=20) as response:
-                    if response.status == 200:
-                        text = await response.text()
-                        if text and text.strip():
-                            return text.strip()
-            except Exception:
-                continue
 
+    async with aiohttp.ClientSession(headers=headers) as session:
+        # 1-qadam: Status tokenni olish
+        async with session.get("https://duckduckgo.com/duckchat/v1/status") as resp:
+            vqd = resp.headers.get("x-vqd-4")
+            
+        if not vqd:
+            return None
+
+        # 2-qadam: Savolni yuborish
+        chat_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "x-vqd-4": vqd
+        }
+        
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": prompt_text}]
+        }
+        
+        async with session.post("https://duckduckgo.com/duckchat/v1/chat", json=payload, headers=chat_headers) as resp:
+            if resp.status == 200:
+                result_text = ""
+                async for line in resp.content:
+                    decoded_line = line.decode('utf-8').strip()
+                    if decoded_line.startswith("data: "):
+                        data_str = decoded_line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        import json
+                        try:
+                            data_json = json.loads(data_str)
+                            if "message" in data_json:
+                                result_text += data_json["message"]
+                        except Exception:
+                            continue
+                return result_text.strip() if result_text else None
     return None
 
 
@@ -118,11 +135,11 @@ async def ai_chat(message: types.Message):
     await bot.send_chat_action(message.chat.id, "typing")
 
     try:
-        reply_text = await fetch_ai_response(message.text)
+        reply_text = await fetch_duckduckgo_ai(message.text)
         if reply_text:
             await message.answer(reply_text)
         else:
-            await message.answer("⚠️ AI serverlarida vaqtinchalik yuklama bor. Qayta urinib ko'ring.")
+            await message.answer("⚠️ AI serverlarida vaqtinchalik yuklama bor. Iltimos qayta urinib ko'ring.")
     except Exception:
         await message.answer("⚠️ Xatolik yuz berdi, iltimos qaytadan yozib ko'ring.")
 
