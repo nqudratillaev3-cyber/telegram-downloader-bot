@@ -41,7 +41,7 @@ async def start_handler(message: types.Message):
     welcome_text = (
         "<b>Salom! Men sizning ko'p funksiyali AI yordamchingizman.</b>\n\n"
         "✨ <b>Imkoniyatlar:</b>\n"
-        "• AI bilan muloqot (Llama 3.3)\n"
+        "• AI bilan muloqot (Llama 3)\n"
         "• Rasm generatsiya qilish: <code>/image &lt;tasvir tavsifi&gt;</code>\n\n"
         "Menga shunchaki savolingizni yuboring!"
     )
@@ -57,7 +57,6 @@ async def image_handler(message: types.Message):
 
     await message.answer("🎨 Rasm tayyorlanmoqda, kuting...")
     
-    # URL to'g'ri formatlash
     encoded_prompt = urllib.parse.quote(prompt)
     image_url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&seed=42"
     
@@ -71,9 +70,8 @@ async def image_handler(message: types.Message):
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
     try:
-        # await bilan asinxron chaqirish
         response = await groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama3-8b-8192",
             messages=[
                 {"role": "system", "content": "Siz foydali, aqlli va xushmuomala AI yordamchisiz. Foydalanuvchiga aniq va o'zbek tilida javob bering."},
                 {"role": "user", "content": message.text}
@@ -85,7 +83,8 @@ async def ai_chat_handler(message: types.Message):
         await message.answer(answer)
     except Exception as e:
         logging.error(f"Groq AI error: {e}")
-        await message.answer("🤖 AI javob qaytarishda xatolik yuz berdi. Iltimos qaytadan urining.")
+        # Xato bergan taqdirda xatoning matnini Telegram'ga chiqaradi
+        await message.answer(f"🤖 AI xatoligi: {e}")
 
 # --- ASOSIY ISHGA TUSHIRISH ---
 async def main():
