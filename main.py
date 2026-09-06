@@ -1,79 +1,105 @@
 import os
-import asyncio
-import logging
+import re
+import urllib.parse
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import Command
+from aiogram.types import FSInputFile, URLInputFile
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart
 import yt_dlp
+from google import genai
 
-# @Helpdowloads_bot tokeni
-BOT_TOKEN = "8201911449:AAG5zn-D9seGtzK2N4RnyALMHCR3nF9jfso"
-
-logging.basicConfig(level=logging.INFO)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8201911449:AAG5zn-D9seGtzK2N4RnyALMHCR3nF9jfso")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6llE7DQ0f30TrOv2kJ7HFqQlojov9qv14xuEKsEfx4pBg")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-def download_media(url: str, download_folder: str = "downloads"):
-    if not os.path.exists(download_folder):
-        os.makedirs(download_folder)
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+@dp.message(Command("start"))
+async def start_cmd(message: types.Message):
+    welcome_text = (
+        "<b>Salom! Men ko'p funksiyali AI va Downloader botman!</b> 🤖🚀\n\n"
+        "<b>Imkoniyatlarim:</b>\n"
+        "1. 📥 <b>Media yuklash:</b> Instagram, TikTok yoki YouTube havolasini yuboring.\n"
+        "2. 💬 <b>AI Chat:</b> Har qanday savolingizni matn ko'rinishida yozing.\n"
+        "3. 🎨 <b>Rasm generatsiya:</b> <code>/image rasm matni</code> deb yuboring.\n"
+        "<i>Masalan: /image kosmosda uchayotgan futuristik avtomobil</i>"
+    )
+    await message.answer(welcome_text, parse_mode="HTML")
+
+@dp.message(Command("image"))
+async def generate_image(message: types.Message):
+    prompt = message.text.replace("/image", "").strip()
+    if not prompt:
+        await message.answer("Iltimos, rasmni tasvirlab bering.\nMasalan: <code>/image tog' ustidagi zamonaviy shahar</code>", parse_mode="HTML")
+        return
+
+    status_msg = await message.answer("🎨 Rasm chizilmoqda, kuting...")
+    try:
+        encoded_prompt = urllib.parse.quote(prompt)
+        image_url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&seed=42&model=flux"
+        photo = URLInputFile(image_url)
+        
+        await message.answer_photo(photo, caption=f"✨ <b>So'rov:</b> {prompt}", parse_mode="HTML")
+        await status_msg.delete()
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Rasm yaratishda xatolik yuz berdi: {e}")
+
+@dp.message(F.text.contains("instagram.com") | F.text.contains("tiktok.com") | F.text.contains("youtu.be") | F.text.contains("youtube.com"))
+async def download_media(message: types.Message):
+    url = message.text.strip()
+    status_msg = await message.answer("⏳ Media yuklanmoqda, kuting...")
 
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'outtmpl': f'{download_folder}/%(id)s.%(ext)s',
-        'merge_output_format': 'mp4',
+        'outtmpl': 'downloads/%(id)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
-        if not filename.endswith('.mp4'):
-            filename = os.path.splitext(filename)[0] + '.mp4'
-        return filename
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
 
-@dp.message(CommandStart())
-async def send_welcome(message: types.Message):
-    await message.answer("Salom! Menga Instagram, TikTok yoki YouTube havolasini yuboring.")
+        video = FSInputFile(filename)
+        await message.answer_video(video)
+        await status_msg.delete()
+
+        if os.path.exists(filename):
+            os.remove(filename)
+    except Exception as e:
+        await status_msg.edit_text("❌ Mediani yuklab bo'lmadi. Havola to'g'riligini tekshiring.")
 
 @dp.message(F.text)
-async def handle_message(message: types.Message):
-    url = message.text.strip()
-    if not (url.startswith("http://") or url.startswith("https://")):
-        await message.answer("Iltimos, to'g'ri havola yuboring.")
-        return
-
-    msg = await message.answer("Video yuklanmoqda, kuting...")
+async def ai_chat(message: types.Message):
+    await bot.send_chat_action(message.chat.id, "typing")
     try:
-        loop = asyncio.get_event_loop()
-        file_path = await loop.run_in_executor(None, download_media, url)
-        
-        video_file = types.FSInputFile(file_path)
-        await message.answer_video(video_file)
-        
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        await msg.delete()
+        response = ai_client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=message.text,
+        )
+        await message.answer(response.text)
     except Exception as e:
-        logging.error(f"Xatolik: {e}")
-        await msg.edit_text("Videoni yuklab bo'lmadi. Havolani tekshirib qayta urinib ko'ring.")
+        await message.answer(f"🤖 Xatolik yuz berdi: {e}")
 
-async def start_dummy_server():
-    async def handle(request):
-        return web.Response(text="Bot runs 24/7!")
-    
+async def handle(request):
+    return web.Response(text="Bot runs 24/7 autonomously!")
+
+async def start_web_server():
     app = web.Application()
-    app.router.add_get("/", handle)
+    app.router.add_get('/', handle)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
 
 async def main():
-    await start_dummy_server()
+    await start_web_server()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
