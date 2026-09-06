@@ -4,25 +4,51 @@ import os
 import re
 import urllib.parse
 import traceback
-from aiogram import Bot, Dispatcher, types, F
+import sqlite3
+from aiogram import Bot, Dispatcher, types, F, github
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiohttp import web
 from google import genai
+from google.genai import types as genai_types
 from github import Github
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 
+# --- ENVIRONMENT VARIABLES ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # Telegram ID'ingizni Render'ga ADMIN_ID qilib qo'shing
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# --- BAZA (SQLITE) STATISTIKA UCHUN ---
+conn = sqlite3.connect("bot_data.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY
+    )
+""")
+conn.commit()
+
+def add_user(user_id: int):
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+
+def get_total_users():
+    cursor.execute("SELECT COUNT(*) FROM users")
+    return cursor.fetchone()[0]
+
+def get_all_users():
+    cursor.execute("SELECT user_id FROM users")
+    return [row[0] for row in cursor.fetchall()]
 
 # --- PORT SERVER ---
 async def handle(request):
@@ -43,7 +69,6 @@ async def auto_fix_and_push(error_message: str):
         return False
 
     err_str = str(error_message).upper()
-    # API limit, server bandligi yoki kvota xatolari bo'lsa Auto-Fix ishlamaydi
     if any(k in err_str for k in ["RESOURCE_EXHAUSTED", "429", "503", "UNAVAILABLE", "404", "QUOTA"]):
         return False
 
@@ -80,35 +105,88 @@ async def auto_fix_and_push(error_message: str):
         logging.error(f"Auto-Fix error: {e}")
         return False
 
-# --- HAVOLADAN YUKLAB OLISH FUNKSIYASI ---
-def download_video(url: str, output_path: str = "downloaded_video.mp4"):
-    ydl_opts = {
-        'format': 'best[ext=mp4]/best',
-        'outtmpl': output_path,
-        'quiet': True,
-        'no_warnings': True,
-        'max_filesize': 50 * 1024 * 1024
-    }
+# --- YUKLAB OLISH FUNKSIYALARI ---
+def download_media(url: str, is_audio: bool = False, output_path: str = "downloaded_file"):
+    if is_audio:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': f"{output_path}.%(ext)s",
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+            'no_warnings': True,
+            'max_filesize': 50 * 1024 * 1024
+        }
+    else:
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best',
+            'outtmpl': f"{output_path}.mp4",
+            'quiet': True,
+            'no_warnings': True,
+            'max_filesize': 50 * 1024 * 1024
+        }
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
-    return output_path
+    
+    return f"{output_path}.mp3" if is_audio else f"{output_path}.mp4"
 
 # --- HANDLERLAR ---
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
+    add_user(message.from_user.id)
     welcome_text = (
-        "<b>Salom! Men sizning ko'p tilli AI yordamchingiz va Downloader botingizman.</b>\n\n"
+        "<b>Salom! Men sizning ko'p funktsiyali AI yordamchingizman.</b>\n\n"
         "✨ <b>Imkoniyatlar:</b>\n"
-        "• AI Chat (O'zbekcha, Русский, English)\n"
-        "• Media yuklash: YouTube, Instagram, TikTok havolasini yuboring 🔗\n"
-        "• Rasm generatsiyasi: <code>/image &lt;prompt&gt;</code>\n\n"
-        "Menga havola yoki istalgan matn yuboring!"
+        "• 🎥 Video / 🎵 MP3 yuklash (YouTube, Instagram, TikTok havolasi)\n"
+        "• 🎙 Ovozli xabarlarni tushunish va AI javobi\n"
+        "• 🖼 Rasmlarni tahlil qilish (Vision AI)\n"
+        "• 🎨 Rasm generatsiyasi: <code>/image &lt;tavsif&gt;</code>\n"
+        "• 💬 AI Chat (O'zbek, Rus, Ingliz tillarida)\n\n"
+        "Shunchaki havola, matn, rasm yoki ovozli xabar yuboring!"
     )
     await message.answer(welcome_text, parse_mode=ParseMode.HTML)
 
+# 4. ADMIN PANEL & STATISTIKA
+@dp.message(Command("stats"))
+async def stats_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    total = get_total_users()
+    await message.answer(f"📊 <b>Bot Statistikasi:</b>\n\n👥 Jami foydalanuvchilar: <b>{total}</b> ta", parse_mode=ParseMode.HTML)
+
+@dp.message(Command("send"))
+async def broadcast_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    text_to_send = message.text.replace("/send", "").strip()
+    if not text_to_send:
+        await message.answer("⚠️ Yuboriladigan matnni kiriting: <code>/send Salom hammaga!</code>", parse_mode=ParseMode.HTML)
+        return
+
+    users = get_all_users()
+    count = 0
+    await message.answer(f"📢 {len(users)} ta foydalanuvchiga xabar yuborilmoqda...")
+    
+    for uid in users:
+        try:
+            await bot.send_message(chat_id=uid, text=text_to_send)
+            count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga muvaffaqiyatli yetkazildi!")
+
+# RASM GENERATSIYASI
 @dp.message(Command("image"))
 async def image_handler(message: types.Message):
+    add_user(message.from_user.id)
     prompt = message.text.replace("/image", "").strip()
     if not prompt:
         await message.answer("⚠️ Tavsif kiriting: <code>/image space sunset</code>", parse_mode=ParseMode.HTML)
@@ -123,37 +201,123 @@ async def image_handler(message: types.Message):
     except Exception:
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi.")
 
+# 1. YOUTUBE / MEDIA MP3 CALLBACK
+@dp.callback_query(F.data.startswith("dl_mp3:"))
+async def callback_dl_mp3(callback: types.CallbackQuery):
+    url = callback.data.split("dl_mp3:", 1)[1]
+    await callback.message.edit_text("🎵 MP3 audio yuklanmoqda, biroz kuting...")
+    
+    file_prefix = f"audio_{callback.from_user.id}"
+    try:
+        loop = asyncio.get_event_loop()
+        final_file = await loop.run_in_executor(None, download_media, url, True, file_prefix)
+        
+        audio = FSInputFile(final_file)
+        await callback.message.answer_audio(audio=audio, caption="✅ Audio tayyor!")
+        await callback.message.delete()
+        
+        if os.path.exists(final_file):
+            os.remove(final_file)
+    except Exception as e:
+        await callback.message.edit_text("❌ MP3 audio yuklab olishda xatolik yuz berdi.")
+
+# 3. VISION AI (RASMLARNI TAHLIL QILISH)
+@dp.message(F.photo)
+async def photo_analysis_handler(message: types.Message):
+    add_user(message.from_user.id)
+    status_msg = await message.answer("🔍 Rasm tahlil qilinmoqda...")
+    
+    file_id = message.photo[-1].file_id
+    file = await bot.get_file(file_id)
+    file_path = f"photo_{message.from_user.id}.jpg"
+    await bot.download_file(file.file_path, file_path)
+
+    caption = message.caption if message.caption else "Rasmni batafsil tahlil qilib, tushuntirib ber."
+
+    try:
+        with open(file_path, "rb") as img_file:
+            img_bytes = img_file.read()
+
+        response = ai_client.models.generate_content(
+            model='gemini-3.6-flash',
+            contents=[
+                genai_types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                f"You are a helpful AI assistant. Always reply in the user's language. Prompt: {caption}"
+            ]
+        )
+        await status_msg.edit_text(response.text)
+    except Exception as e:
+        await status_msg.edit_text("❌ Rasmni tahlil qilishda xatolik yuz berdi.")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# 2. VOICE MESSAGE TO TEXT / AI (OVOZLI XABARLAR)
+@dp.message(F.voice)
+async def voice_handler(message: types.Message):
+    add_user(message.from_user.id)
+    status_msg = await message.answer("🎙 Ovoz tinglanmoqda va tahlil qilinmoqda...")
+    
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = f"voice_{message.from_user.id}.ogg"
+    await bot.download_file(file.file_path, file_path)
+
+    try:
+        with open(file_path, "rb") as audio_file:
+            audio_bytes = audio_file.read()
+
+        response = ai_client.models.generate_content(
+            model='gemini-3.6-flash',
+            contents=[
+                genai_types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg"),
+                "Listen to this audio carefully and answer the question/request in the same language."
+            ]
+        )
+        await status_msg.edit_text(f"🎙 <b>Sizning ovozingizga AI javobi:</b>\n\n{response.text}", parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await status_msg.edit_text("❌ Ovozni qayta ishlashda xatolik yuz berdi.")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# MATN VA HAVOLALAR HANDLERI
 @dp.message(F.text)
 async def main_handler(message: types.Message):
+    add_user(message.from_user.id)
     text = message.text.strip()
     
     url_pattern = re.compile(r'https?://[^\s]+')
     urls = url_pattern.findall(text)
 
-    # 1. Havola yuborilgan bo'lsa
+    # 1. Havola bo'lsa (Downloader + MP3 tugmasi)
     if urls:
         url = urls[0]
         status_msg = await message.answer("📥 Video yuklanmoqda, biroz kuting...")
-        file_path = f"video_{message.from_user.id}.mp4"
+        file_prefix = f"video_{message.from_user.id}"
         
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, download_video, url, file_path)
+            final_file = await loop.run_in_executor(None, download_media, url, False, file_prefix)
             
-            video = FSInputFile(file_path)
-            await message.answer_video(video=video, caption="✅ Videongiz tayyor!")
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎵 MP3 formatda yuklash", callback_data=f"dl_mp3:{url}")]
+            ])
+            
+            video = FSInputFile(final_file)
+            await message.answer_video(video=video, caption="✅ Videongiz tayyor!", reply_markup=kb)
             await status_msg.delete()
             
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if os.path.exists(final_file):
+                os.remove(final_file)
             return
         except Exception:
-            if os.path.exists(file_path):
-                os.remove(file_path)
+            if os.path.exists(f"{file_prefix}.mp4"):
+                os.remove(f"{file_prefix}.mp4")
             await status_msg.edit_text("❌ Ushbu havoladan videoni yuklab bo'lmadi yoki fayl hajmi juda katta (50MB+).")
             return
 
-    # 2. AI Chat
+    # AI Chat
     system_instruction = "You are a helpful AI assistant. Always reply in the user's language (Uzbek, Russian, or English)."
     try:
         response = ai_client.models.generate_content(
@@ -167,15 +331,15 @@ async def main_handler(message: types.Message):
         
         full_err_text = f"{str(e)} {repr(e)} {error_trace}".upper()
         
-        if any(keyword in full_err_text for keyword in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "QUOTA", "RATE_LIMIT", "TOO MANY REQUESTS"]):
-            await message.answer("⏳ Google AI serverlarida yuklama yuqori yoki vaqtincha band. 1-2 daqiqadan so'ng qayta yozib ko'ring.")
+        if any(keyword in full_err_text for keyword in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "QUOTA", "RATE_LIMIT"]):
+            await message.answer("⏳ Serverlarda yuklama yuqori. 1 daqiqadan so'ng qayta urinib ko'ring.")
             return
 
         status_msg = await message.answer("⚠️ Botda koddagi xatolik aniqlandi. Auto-Fix ishga tushdi...")
         fixed = await auto_fix_and_push(error_trace)
         
         if fixed:
-            await status_msg.edit_text("🔄 Kod avtomatik tuzatildi va GitHub'ga saqlandi! Render 1 daqiqada qayta deploy qiladi.")
+            await status_msg.edit_text("🔄 Kod avtomatik tuzatildi va GitHub'ga saqlandi!")
         else:
             await status_msg.edit_text("⚠️ Serverda vaqtincha xatolik. Birozdan so'ng urinib ko'ring.")
 
