@@ -2,3 +2,4 @@ aiogram
 google-genai
 aiohttp
 tenacity
+yt-dlp
