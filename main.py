@@ -5,13 +5,14 @@ import re
 import urllib.parse
 import traceback
 import sqlite3
-from aiogram import Bot, Dispatcher, types, F, github
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiohttp import web
 from google import genai
 from google.genai import types as genai_types
+import github
 from github import Github
 import yt_dlp
 
@@ -22,7 +23,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # Telegram ID'ingizni Render'ga ADMIN_ID qilib qo'shing
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -134,14 +135,34 @@ def download_media(url: str, is_audio: bool = False, output_path: str = "downloa
     
     return f"{output_path}.mp3" if is_audio else f"{output_path}.mp4"
 
+# QOSHIK QIDIRISH FUNKSIYASI
+def search_youtube_music(query: str, limit: int = 5):
+    ydl_opts = {
+        'default_search': 'ytsearch',
+        'quiet': True,
+        'extract_flat': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        results = []
+        if 'entries' in info:
+            for entry in info['entries']:
+                results.append({
+                    'title': entry.get('title', 'Noma\'lum qo\'shiq'),
+                    'url': entry.get('url', f"[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=){entry.get('id')}"),
+                    'id': entry.get('id')
+                })
+        return results
+
 # --- HANDLERLAR ---
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     add_user(message.from_user.id)
     welcome_text = (
-        "<b>Salom! Men sizning ko'p funktsiyali AI yordamchingizman.</b>\n\n"
+        "<b>Salom! Men sizning ko'p funktsiyali AI yordamchingiz va Downloader botingizman.</b>\n\n"
         "✨ <b>Imkoniyatlar:</b>\n"
+        "• 🎧 Qo'shiq izlash: <code>/music &lt;nomi&gt;</code>\n"
         "• 🎥 Video / 🎵 MP3 yuklash (YouTube, Instagram, TikTok havolasi)\n"
         "• 🎙 Ovozli xabarlarni tushunish va AI javobi\n"
         "• 🖼 Rasmlarni tahlil qilish (Vision AI)\n"
@@ -151,7 +172,36 @@ async def start_handler(message: types.Message):
     )
     await message.answer(welcome_text, parse_mode=ParseMode.HTML)
 
-# 4. ADMIN PANEL & STATISTIKA
+# MUSIQA IZLASH HANDLERI (/music)
+@dp.message(Command("music"))
+async def music_search_handler(message: types.Message):
+    add_user(message.from_user.id)
+    query = message.text.replace("/music", "").strip()
+    if not query:
+        await message.answer("⚠️ Qo'shiq nomini yoki ijrochini kiriting:\nMasalan: <code>/music Janob Rasul</code>", parse_mode=ParseMode.HTML)
+        return
+
+    status_msg = await message.answer("🔍 Qo'shiqlar qidirilmoqda...")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, search_youtube_music, query, 5)
+        
+        if not results:
+            await status_msg.edit_text("❌ Hech qanday qo'shiq topilmadi.")
+            return
+
+        buttons = []
+        for i, res in enumerate(results, start=1):
+            title = res['title'][:35]
+            buttons.append([InlineKeyboardButton(text=f"🎵 {i}. {title}", callback_data=f"dl_mp3:{res['url']}")])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await status_msg.edit_text(f"🎧 <b>'{query}' bo'yicha topilgan qo'shiqlar:</b>\n\nKerakli qo'shiqni tanlang 👇", reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await status_msg.edit_text("❌ Musiqa qidirishda xatolik yuz berdi.")
+
+# ADMIN PANEL & STATISTIKA
 @dp.message(Command("stats"))
 async def stats_handler(message: types.Message):
     if message.from_user.id != ADMIN_ID:
@@ -201,11 +251,11 @@ async def image_handler(message: types.Message):
     except Exception:
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi.")
 
-# 1. YOUTUBE / MEDIA MP3 CALLBACK
+# YOUTUBE / MEDIA MP3 CALLBACK
 @dp.callback_query(F.data.startswith("dl_mp3:"))
 async def callback_dl_mp3(callback: types.CallbackQuery):
     url = callback.data.split("dl_mp3:", 1)[1]
-    await callback.message.edit_text("🎵 MP3 audio yuklanmoqda, biroz kuting...")
+    await callback.message.answer("🎵 MP3 audio yuklanmoqda, biroz kuting...")
     
     file_prefix = f"audio_{callback.from_user.id}"
     try:
@@ -214,14 +264,13 @@ async def callback_dl_mp3(callback: types.CallbackQuery):
         
         audio = FSInputFile(final_file)
         await callback.message.answer_audio(audio=audio, caption="✅ Audio tayyor!")
-        await callback.message.delete()
         
         if os.path.exists(final_file):
             os.remove(final_file)
     except Exception as e:
-        await callback.message.edit_text("❌ MP3 audio yuklab olishda xatolik yuz berdi.")
+        await callback.message.answer("❌ MP3 audio yuklab olishda xatolik yuz berdi.")
 
-# 3. VISION AI (RASMLARNI TAHLIL QILISH)
+# VISION AI (RASMLARNI TAHLIL QILISH)
 @dp.message(F.photo)
 async def photo_analysis_handler(message: types.Message):
     add_user(message.from_user.id)
@@ -252,7 +301,7 @@ async def photo_analysis_handler(message: types.Message):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# 2. VOICE MESSAGE TO TEXT / AI (OVOZLI XABARLAR)
+# VOICE MESSAGE TO TEXT / AI (OVOZLI XABARLAR)
 @dp.message(F.voice)
 async def voice_handler(message: types.Message):
     add_user(message.from_user.id)
@@ -290,7 +339,7 @@ async def main_handler(message: types.Message):
     url_pattern = re.compile(r'https?://[^\s]+')
     urls = url_pattern.findall(text)
 
-    # 1. Havola bo'lsa (Downloader + MP3 tugmasi)
+    # Havola bo'lsa (Downloader + MP3 tugmasi)
     if urls:
         url = urls[0]
         status_msg = await message.answer("📥 Video yuklanmoqda, biroz kuting...")
