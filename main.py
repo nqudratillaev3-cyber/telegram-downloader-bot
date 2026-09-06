@@ -11,16 +11,16 @@ from groq import Groq
 # Logging sozlamalari
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables (Muhit o'zgaruvchilari)
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Bot va Groq klientlarini retsializatsiya qilish
+# Bot va Groq klientlari
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY")
+groq_client = Groq(api_key=GROQ_API_KEY)
 
-# --- RENDER PORT SCAN FIX (PORT SERVER) ---
+# --- RENDER PORT SERVER FIX ---
 async def handle(request):
     return web.Response(text="Bot barqaror ishlamoqda!")
 
@@ -41,9 +41,9 @@ async def start_handler(message: types.Message):
     welcome_text = (
         "<b>Salom! Men sizning ko'p funksiyali AI yordamchingizman.</b>\n\n"
         "✨ <b>Imkoniyatlar:</b>\n"
-        "• AI bilan muloqot (Llama 3.3 70B)\n"
+        "• AI bilan muloqot (Llama 3.3)\n"
         "• Rasm generatsiya qilish: <code>/image &lt;tasvir tavsifi&gt;</code>\n\n"
-        "Manga shunchaki savolingizni yuboring!"
+        "Menga shunchaki savolingizni yuboring!"
     )
     await message.answer(welcome_text, parse_mode=ParseMode.HTML)
 
@@ -57,7 +57,6 @@ async def image_handler(message: types.Message):
 
     await message.answer("🎨 Rasm tayyorlanmoqda, kuting...")
     
-    # Pollinations AI integratsiyasi
     encoded_prompt = httpx.URL(prompt).raw_path.decode('utf-8')
     image_url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&seed=42"
     
@@ -67,7 +66,7 @@ async def image_handler(message: types.Message):
         logging.error(f"Image Error: {e}")
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.")
 
-# AI Matn Chat (Groq AI - Llama 3.3)
+# AI Matn Chat (Groq AI)
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
     try:
@@ -84,14 +83,11 @@ async def ai_chat_handler(message: types.Message):
         await message.answer(answer)
     except Exception as e:
         logging.error(f"Groq AI error: {e}")
-        await message.answer("🤖 AI javob qaytarishda xatolik yuz berdi. API kalit to'g'riligini tekshiring.")
+        await message.answer("🤖 AI javob qaytarishda xatolik yuz berdi. Iltimos qaytadan urining.")
 
-# --- ASOSIY ISHGA TUSHMASH FUNKSIYASI ---
+# --- ASOSIY ISHGA TUSHIRISH ---
 async def main():
-    # Render portini ochish (Port Scan Timeout xatosini bartaraf etadi)
     await start_dummy_server()
-    
-    # Polling boshlash
     logging.info("Bot ishga tushmoqda...")
     await dp.start_polling(bot)
 
