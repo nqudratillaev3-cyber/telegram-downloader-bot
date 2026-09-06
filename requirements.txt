@@ -1,5 +1,8 @@
-aiogram
+aiogram==3.3.0
+groq==0.4.2
 google-genai
 aiohttp
 tenacity
 yt-dlp
+requests
+urllib3
