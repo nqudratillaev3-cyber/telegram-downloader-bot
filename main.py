@@ -11,7 +11,7 @@ from google import genai
 # Logging sozlamalari
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables (Atrof-muhit o'zgaruvchilari)
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
@@ -34,7 +34,7 @@ async def start_dummy_server():
     await site.start()
     logging.info(f"Port server {port}-portda ishga tushdi.")
 
-# --- HANDLERLAR (OBRABOTCHIKLAR) ---
+# --- HANDLERLAR ---
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
@@ -72,7 +72,7 @@ async def image_handler(message: types.Message):
         logging.error(f"Image Error: {e}")
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi / Ошибка при создании картинки / Image generation error.")
 
-# AI Matn Chat (Google Gemini API - Uch tilli qo'llab-quvvatlash)
+# AI Matn Chat (Google Gemini API - Toshdek barqaror gemini-3.6-flash)
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
     system_instruction = (
@@ -82,7 +82,7 @@ async def ai_chat_handler(message: types.Message):
     
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.6-flash',
             contents=f"{system_instruction}\n\nUser: {message.text}",
         )
         await message.answer(response.text)
