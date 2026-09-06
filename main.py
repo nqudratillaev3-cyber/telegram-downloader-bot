@@ -7,17 +7,16 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile
-import google.generativeai as genai
+from google import genai
 
 # Environment Variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Bot va AI ni sozlash
+# Bot va Client
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
-genai.configure(api_key=GEMINI_API_KEY)
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # /start va /help buyruqlari
@@ -73,22 +72,24 @@ async def generate_image_cmd(message: types.Message):
             await message.answer("❌ Rasm serveridan javob olib bo'lmadi. Keyinroq qayta urining.")
             await msg_processing.delete()
 
-    except Exception as e:
-        await message.answer(f"❌ Rasm yaratishda xatolik yuz berdi.")
+    except Exception:
+        await message.answer("❌ Rasm yaratishda xatolik yuz berdi.")
         try:
             await msg_processing.delete()
-        except:
+        except Exception:
             pass
 
 
 # Gemini AI So'rovi
 def ask_gemini(prompt_text: str):
-    models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro']
+    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
     
     for model_name in models_to_try:
         try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt_text)
+            response = ai_client.models.generate_content(
+                model=model_name,
+                contents=prompt_text,
+            )
             if response and response.text:
                 return response.text
         except Exception:
@@ -100,20 +101,18 @@ def ask_gemini(prompt_text: str):
 # AI Chat ishlovchisi
 @dp.message()
 async def ai_chat(message: types.Message):
-    # Agar havola (link) yuborilgan bo'lsa AI tegmaydi
     if message.text and (message.text.startswith("http") or "://" in message.text):
         return
         
     await bot.send_chat_action(message.chat.id, "typing")
 
-    # Sinxron funksiyani asinxron ishga tushirish
     loop = asyncio.get_event_loop()
     reply_text = await loop.run_in_executor(None, ask_gemini, message.text)
 
     if reply_text:
         await message.answer(reply_text)
     else:
-        await message.answer("⚠️ AI API limiti to'lgan yoki serverda yuqori yuklama bor. Iltimos, 1 minutdan so'ng qayta yozing.")
+        await message.answer("⚠️ AI API bepul so'rovlar limiti to'lgan yoki server javob bermadi. Iltimos, 1 minutdan so'ng qayta yozib ko'ring.")
 
 
 # Health Check web serveri
