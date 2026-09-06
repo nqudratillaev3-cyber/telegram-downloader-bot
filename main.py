@@ -108,8 +108,16 @@ async def auto_fix_and_push(error_message: str):
 
 # --- YUKLAB OLISH FUNKSIYALARI ---
 def download_media(url: str, is_audio: bool = False, output_path: str = "downloaded_file"):
+    common_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'max_filesize': 50 * 1024 * 1024,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    
     if is_audio:
         ydl_opts = {
+            **common_opts,
             'format': 'bestaudio/best',
             'outtmpl': f"{output_path}.%(ext)s",
             'postprocessors': [{
@@ -117,17 +125,12 @@ def download_media(url: str, is_audio: bool = False, output_path: str = "downloa
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'quiet': True,
-            'no_warnings': True,
-            'max_filesize': 50 * 1024 * 1024
         }
     else:
         ydl_opts = {
+            **common_opts,
             'format': 'best[ext=mp4]/best',
             'outtmpl': f"{output_path}.mp4",
-            'quiet': True,
-            'no_warnings': True,
-            'max_filesize': 50 * 1024 * 1024
         }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -141,17 +144,19 @@ def search_youtube_music(query: str, limit: int = 5):
         'default_search': 'ytsearch',
         'quiet': True,
         'extract_flat': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
         results = []
-        if 'entries' in info:
+        if info and 'entries' in info:
             for entry in info['entries']:
-                results.append({
-                    'title': entry.get('title', 'Noma\'lum qo\'shiq'),
-                    'url': entry.get('url', f"[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=){entry.get('id')}"),
-                    'id': entry.get('id')
-                })
+                if entry:
+                    results.append({
+                        'title': entry.get('title', 'Noma\'lum qo\'shiq'),
+                        'url': entry.get('url', f"[https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=){entry.get('id')}"),
+                        'id': entry.get('id')
+                    })
         return results
 
 # --- HANDLERLAR ---
