@@ -13,7 +13,7 @@ from github import Github
 # Logging sozlamalari
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables (Render'dan olinadi)
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -38,11 +38,34 @@ async def start_dummy_server():
     await site.start()
     logging.info(f"Port server {port}-portda ishga tushdi.")
 
+# --- ZAHIRALI AI GENERATION ENGINE ---
+async def generate_ai_response(prompt_text: str) -> str:
+    """Asosiy model limitga tushsa, avtomatik ravishda zahira modelga o'tadi"""
+    models_to_try = ['gemini-3.6-flash', 'gemini-1.5-flash']
+    
+    for model_name in models_to_try:
+        try:
+            response = ai_client.models.generate_content(
+                model=model_name,
+                contents=prompt_text,
+            )
+            return response.text
+        except Exception as e:
+            logging.warning(f"Model {model_name} xatosi: {e}. Keyingi model sinab ko'rilmoqda...")
+            continue
+            
+    raise Exception("Barcha AI modellar band yoki limitda!")
+
 # --- O'Z-O'ZINI DAVOLASH (AUTO-HEALING) ENGINE ---
 async def auto_fix_and_push(error_message: str):
-    """Xatolik yuz berganda Gemini orqali kodni tuzatib, GitHub'ga avtomatik push qiladi"""
+    """Faqat mantiqiy kod xatolari uchun GitHub'ga avtomatik push qiladi"""
     if not GITHUB_TOKEN or not GITHUB_REPO:
         logging.error("Auto-Fix xatosi: GITHUB_TOKEN yoki GITHUB_REPO sozlanmagan!")
+        return False
+
+    # Limit (429) yoki Model (404) xatolarida kodni o'zgartirish mantiqsiz
+    if "RESOURCE_EXHAUSTED" in error_message or "429" in error_message or "404" in error_message:
+        logging.info("Auto-Fix o'tkazib yuborildi: Bu kod xatosi emas, API limit xatosi.")
         return False
 
     try:
@@ -58,17 +81,13 @@ async def auto_fix_and_push(error_message: str):
             f"Please fix the code. Return ONLY the raw valid Python code without markdown code blocks (```python) or explanations."
         )
 
-        # High limit model: gemini-2.0-flash
-        response = ai_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
-        )
+        # Auto-Fix uchun ham zahirali generator ishlatiladi
+        fixed_code = await generate_ai_response(prompt)
+        fixed_code = fixed_code.strip()
         
-        fixed_code = response.text.strip()
         if fixed_code.startswith("```python"):
             fixed_code = fixed_code.replace("```python", "").replace("```", "").strip()
 
-        # GitHub'ga avtomatik commit qilib yuborish
         repo.update_file(
             path=contents.path,
             message="🤖 Auto-Fix: Bot o'zidagi xatoni avtomatik tuzatdi",
@@ -114,7 +133,7 @@ async def image_handler(message: types.Message):
         logging.error(f"Image Error: {e}")
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi.")
 
-# AI Matn Chat (Kuniga 1500 ta so'rov limitli gemini-2.0-flash)
+# AI Matn Chat (Zahirali va Auto-Healing)
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
     system_instruction = (
@@ -122,23 +141,22 @@ async def ai_chat_handler(message: types.Message):
         "Always respond in the same language the user speaks to you (Uzbek, Russian, or English)."
     )
     
+    full_prompt = f"{system_instruction}\n\nUser: {message.text}"
+    
     try:
-        response = ai_client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=f"{system_instruction}\n\nUser: {message.text}",
-        )
-        await message.answer(response.text)
+        response_text = await generate_ai_response(full_prompt)
+        await message.answer(response_text)
     except Exception as e:
         error_trace = traceback.format_exc()
         logging.error(f"Gemini AI error: {error_trace}")
         
-        status_msg = await message.answer("⚠️ Botda kutilmagan xatolik yuz berdi. Avtomatik tuzatish tizimi ishga tushdi, kuting...")
+        status_msg = await message.answer("⚠️ Botda kutilmagan koddagi xatolik yuz berdi. Auto-Fix ishga tushmoqda...")
         
         fixed = await auto_fix_and_push(error_trace)
         if fixed:
-            await status_msg.edit_text("🔄 Xatolik avtomatik tuzatildi va GitHub'ga saqlandi! Render 1 daqiqada botni qayta deploy qiladi.")
+            await status_msg.edit_text("🔄 Kod avtomatik tuzatildi va GitHub'ga saqlandi! Render 1 daqiqada botni qayta deploy qiladi.")
         else:
-            await status_msg.edit_text(f"⚠️ **AI Xatosi:**\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⚠️ **Xatolik:** Hozirda serverlar band yoki API limitida. Birozdan keyin urinib ko'ring.", parse_mode=ParseMode.HTML)
 
 # --- ASOSIY ISHGA TUSHIRISH ---
 async def main():
