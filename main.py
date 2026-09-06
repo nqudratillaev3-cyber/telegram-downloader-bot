@@ -7,16 +7,13 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile
-from google import genai
 
 # Environment Variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Bot va Client
+# Bot va Dispatcher
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # /start va /help buyruqlari
@@ -27,7 +24,7 @@ async def send_welcome(message: types.Message):
         "Salom! Men ko'p funksiyali AI va Downloader botman! 🤖🚀\n\n"
         "Imkoniyatlarim:\n"
         "1. 📥 <b>Media yuklash:</b> Instagram, TikTok yoki YouTube havolasini yuboring.\n"
-        "2. 💬 <b>AI Chat:</b> Har qanday savolingizni matn ko'rinishida yozing.\n"
+        "2. 💬 <b>AI Chat:</b> Har qanday savolingizni matn ko'rinishida yozing (cheklovsiz).\n"
         "3. 🎨 <b>Rasm generatsiya:</b> <code>/image rasm matni</code> deb yuboring.\n"
         "<i>Masalan: /image kosmosda uchayotgan futuristik avtomobil</i>"
     )
@@ -80,21 +77,16 @@ async def generate_image_cmd(message: types.Message):
             pass
 
 
-# Gemini AI So'rovi
-def ask_gemini(prompt_text: str):
-    models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash"]
+# Cheklovsiz AI Chat So'rovi (Pollinations Text API)
+async def fetch_ai_response(prompt_text: str):
+    encoded_prompt = urllib.parse.quote(prompt_text)
+    url = f"https://text.pollinations.ai/{encoded_prompt}?model=openai"
     
-    for model_name in models_to_try:
-        try:
-            response = ai_client.models.generate_content(
-                model=model_name,
-                contents=prompt_text,
-            )
-            if response and response.text:
-                return response.text
-        except Exception:
-            continue
-            
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=30) as response:
+            if response.status == 200:
+                text = await response.text()
+                return text.strip()
     return None
 
 
@@ -106,13 +98,14 @@ async def ai_chat(message: types.Message):
         
     await bot.send_chat_action(message.chat.id, "typing")
 
-    loop = asyncio.get_event_loop()
-    reply_text = await loop.run_in_executor(None, ask_gemini, message.text)
-
-    if reply_text:
-        await message.answer(reply_text)
-    else:
-        await message.answer("⚠️ AI API bepul so'rovlar limiti to'lgan yoki server javob bermadi. Iltimos, 1 minutdan so'ng qayta yozib ko'ring.")
+    try:
+        reply_text = await fetch_ai_response(message.text)
+        if reply_text:
+            await message.answer(reply_text)
+        else:
+            await message.answer("⚠️ AI javob berishda vaqtinchalik uzilish bo'ldi. Qayta yozib ko'ring.")
+    except Exception:
+        await message.answer("⚠️ Xatolik yuz berdi, iltimos qaytadan urinib ko'ring.")
 
 
 # Health Check web serveri
