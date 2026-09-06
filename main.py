@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = os.getenv("GITHUB_REPO")  # masalan: "nqudratillaev3-cyber/telegram-downloader-bot"
+GITHUB_REPO = os.getenv("GITHUB_REPO")
 
 # Bot va Gemini Client
 bot = Bot(token=BOT_TOKEN)
@@ -58,9 +58,9 @@ async def auto_fix_and_push(error_message: str):
             f"Please fix the code. Return ONLY the raw valid Python code without markdown code blocks (```python) or explanations."
         )
 
-        # Gemini 3.6-flash orqali kodni avtomatik tuzatamiz
+        # High limit model: gemini-2.0-flash
         response = ai_client.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-2.0-flash',
             contents=prompt,
         )
         
@@ -114,7 +114,7 @@ async def image_handler(message: types.Message):
         logging.error(f"Image Error: {e}")
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi.")
 
-# AI Matn Chat (Auto-Healing mexanizmi bilan)
+# AI Matn Chat (Kuniga 1500 ta so'rov limitli gemini-2.0-flash)
 @dp.message(F.text)
 async def ai_chat_handler(message: types.Message):
     system_instruction = (
@@ -124,7 +124,7 @@ async def ai_chat_handler(message: types.Message):
     
     try:
         response = ai_client.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-2.0-flash',
             contents=f"{system_instruction}\n\nUser: {message.text}",
         )
         await message.answer(response.text)
@@ -134,7 +134,6 @@ async def ai_chat_handler(message: types.Message):
         
         status_msg = await message.answer("⚠️ Botda kutilmagan xatolik yuz berdi. Avtomatik tuzatish tizimi ishga tushdi, kuting...")
         
-        # Xatoni o'zi avtomatik tuzatadi va GitHub'ga yuboradi
         fixed = await auto_fix_and_push(error_trace)
         if fixed:
             await status_msg.edit_text("🔄 Xatolik avtomatik tuzatildi va GitHub'ga saqlandi! Render 1 daqiqada botni qayta deploy qiladi.")
