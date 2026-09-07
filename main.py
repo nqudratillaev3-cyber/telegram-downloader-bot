@@ -122,12 +122,17 @@ async def auto_fix_and_push(error_message: str):
         contents = repo.get_contents("main.py")
         current_code = contents.decoded_content.decode("utf-8")
 
-        prompt = (
-            f"You are an expert Python developer. Fix this code error in an aiogram 3 bot:\n\n"
-            f"ERROR:\n{error_message}\n\n"
-            f"CODE:\n{current_code}\n\n"
-            f"Return ONLY valid raw Python code without markdown blocks or explanations."
-        )
+        prompt = f"""
+You are an expert Python developer. Fix this code error in an aiogram 3 bot:
+
+ERROR:
+{error_message}
+
+CODE:
+{current_code}
+
+Return ONLY valid raw Python code without markdown blocks or explanations.
+"""
 
         if claude_client:
             res = claude_client.messages.create(
@@ -145,5 +150,325 @@ async def auto_fix_and_push(error_message: str):
         else:
             return False
 
-        if fixed_code.startswith("```python"):
-            fixed_code = fixed_code.replace("
+        match = re.search(r"```python\s*(.*?)\s*```", fixed_code, re.DOTALL)
+        if match:
+            fixed_code = match.group(1).strip()
+
+        repo.update_file(
+            path=contents.path,
+            message="🤖 Auto-Fix: Claude orqali koddagi xato avtomatik tuzatildi",
+            content=fixed_code,
+            sha=contents.sha
+        )
+        return True
+    except Exception as e:
+        logging.error(f"Auto-Fix error: {e}")
+        return False
+
+# --- YUKLAB OLISH FUNKSIYALARI ---
+def download_media(url: str, is_audio: bool = False, output_path: str = "downloaded_file"):
+    common_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'max_filesize': 50 * 1024 * 1024,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    
+    if is_audio:
+        ydl_opts = {
+            **common_opts,
+            'format': 'bestaudio/best',
+            'outtmpl': f"{output_path}.%(ext)s",
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+        }
+    else:
+        ydl_opts = {
+            **common_opts,
+            'format': 'best[ext=mp4]/best',
+            'outtmpl': f"{output_path}.mp4",
+        }
+    
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    
+    return f"{output_path}.mp3" if is_audio else f"{output_path}.mp4"
+
+def search_youtube_music(query: str, limit: int = 5):
+    ydl_opts = {
+        'default_search': 'ytsearch',
+        'quiet': True,
+        'extract_flat': True,
+        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        results = []
+        if info and 'entries' in info:
+            for entry in info['entries']:
+                if entry:
+                    results.append({
+                        'title': entry.get('title', 'Noma\'lum qo\'shiq'),
+                        'url': entry.get('url', f"https://www.youtube.com/watch?v={entry.get('id')}"),
+                        'id': entry.get('id')
+                    })
+        return results
+
+# --- HANDLERLAR ---
+
+@dp.message(Command("start"))
+async def start_handler(message: types.Message):
+    add_user(message.from_user.id)
+    welcome_text = (
+        "<b>Salom! Men sizning ko'p funktsiyali Multi-AI yordamchingiz va Downloader botingizman.</b>\n\n"
+        "✨ <b>Imkoniyatlar:</b>\n"
+        "• 🧠 AI Modelni tanlash: <code>/model</code>\n"
+        "• 🎧 Qo'shiq izlash: <code>/music &lt;nomi&gt;</code>\n"
+        "• 🎥 Video / 🎵 MP3 yuklash (YouTube, Instagram, TikTok havolasi)\n"
+        "• 🎙 Ovozli xabarlarni tushunish va AI javobi\n"
+        "• 🖼 Rasmlarni tahlil qilish (Vision AI)\n"
+        "• 🎨 Rasm generatsiyasi: <code>/image &lt;tavsif&gt;</code>\n"
+        "• 💬 AI Chat (O'zbek, Rus, Ingliz tillarida)\n\n"
+        "Shunchaki havola, matn, rasm yoki ovozli xabar yuboring!"
+    )
+    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
+
+@dp.message(Command("model"))
+async def model_command_handler(message: types.Message):
+    add_user(message.from_user.id)
+    current_m = get_user_model(message.from_user.id)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚡ Gemini Flash (Tezkor)", callback_data="set_model:gemini")],
+        [InlineKeyboardButton(text="🧠 Claude Haiku (Aqlli)", callback_data="set_model:claude-haiku")],
+        [InlineKeyboardButton(text="🚀 Claude Sonnet (Ultra-Aql)", callback_data="set_model:claude-sonnet")]
+    ])
+    await message.answer(
+        f"⚙️ <b>Sizning joriy AI modelingiz:</b> <code>{current_m.upper()}</code>\n\n"
+        f"Muloqot qilish uchun quyidagi AI modellaridan birini tanlang:",
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+
+@dp.callback_query(F.data.startswith("set_model:"))
+async def callback_set_model(callback: types.CallbackQuery):
+    selected = callback.data.split("set_model:", 1)[1]
+    set_user_model(callback.from_user.id, selected)
+    await callback.message.edit_text(f"✅ Muvaffaqiyatli saqlandi! Endi bot **{selected.upper()}** orqali javob beradi.", parse_mode=ParseMode.MARKDOWN)
+
+@dp.message(Command("music"))
+async def music_search_handler(message: types.Message):
+    add_user(message.from_user.id)
+    query = message.text.replace("/music", "").strip()
+    if not query:
+        await message.answer("⚠️ Qo'shiq nomini yoki ijrochini kiriting:\nMasalan: <code>/music Janob Rasul</code>", parse_mode=ParseMode.HTML)
+        return
+
+    status_msg = await message.answer("🔍 Qo'shiqlar qidirilmoqda...")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, search_youtube_music, query, 5)
+        
+        if not results:
+            await status_msg.edit_text("❌ Hech qanday qo'shiq topilmadi.")
+            return
+
+        buttons = []
+        for i, res in enumerate(results, start=1):
+            title = res['title'][:35]
+            buttons.append([InlineKeyboardButton(text=f"🎵 {i}. {title}", callback_data=f"dl_mp3:{res['url']}")])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await status_msg.edit_text(f"🎧 <b>'{query}' bo'yicha topilgan qo'shiqlar:</b>\n\nKerakli qo'shiqni tanlang 👇", reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        await status_msg.edit_text("❌ Musiqa qidirishda xatolik yuz berdi.")
+
+@dp.message(Command("stats"))
+async def stats_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    total = get_total_users()
+    await message.answer(f"📊 <b>Bot Statistikasi:</b>\n\n👥 Jami foydalanuvchilar: <b>{total}</b> ta", parse_mode=ParseMode.HTML)
+
+@dp.message(Command("send"))
+async def broadcast_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    text_to_send = message.text.replace("/send", "").strip()
+    if not text_to_send:
+        await message.answer("⚠️ Yuboriladigan matnni kiriting: <code>/send Salom hammaga!</code>", parse_mode=ParseMode.HTML)
+        return
+
+    users = get_all_users()
+    count = 0
+    await message.answer(f"📢 {len(users)} ta foydalanuvchiga xabar yuborilmoqda...")
+    
+    for uid in users:
+        try:
+            await bot.send_message(chat_id=uid, text=text_to_send)
+            count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+
+    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga muvaffaqiyatli yetkazildi!")
+
+@dp.message(Command("image"))
+async def image_handler(message: types.Message):
+    add_user(message.from_user.id)
+    prompt = message.text.replace("/image", "").strip()
+    if not prompt:
+        await message.answer("⚠️ Tavsif kiriting: <code>/image space sunset</code>", parse_mode=ParseMode.HTML)
+        return
+
+    await message.answer("🎨 Rasm tayyorlanmoqda...")
+    encoded_prompt = urllib.parse.quote(prompt)
+    image_url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&seed=42"
+    
+    try:
+        await message.answer_photo(photo=image_url, caption=f"🖼 <b>Natija:</b> {prompt}", parse_mode=ParseMode.HTML)
+    except Exception:
+        await message.answer("❌ Rasm yaratishda xatolik yuz berdi.")
+
+@dp.callback_query(F.data.startswith("dl_mp3:"))
+async def callback_dl_mp3(callback: types.CallbackQuery):
+    url = callback.data.split("dl_mp3:", 1)[1]
+    await callback.message.answer("🎵 MP3 audio yuklanmoqda, biroz kuting...")
+    
+    file_prefix = f"audio_{callback.from_user.id}"
+    try:
+        loop = asyncio.get_event_loop()
+        final_file = await loop.run_in_executor(None, download_media, url, True, file_prefix)
+        
+        audio = FSInputFile(final_file)
+        await callback.message.answer_audio(audio=audio, caption="✅ Audio tayyor!")
+        
+        if os.path.exists(final_file):
+            os.remove(final_file)
+    except Exception:
+        await callback.message.answer("❌ MP3 audio yuklab olishda xatolik yuz berdi.")
+
+@dp.message(F.photo)
+async def photo_analysis_handler(message: types.Message):
+    add_user(message.from_user.id)
+    status_msg = await message.answer("🔍 Rasm tahlil qilinmoqda...")
+    
+    file_id = message.photo[-1].file_id
+    file = await bot.get_file(file_id)
+    file_path = f"photo_{message.from_user.id}.jpg"
+    await bot.download_file(file.file_path, file_path)
+
+    caption = message.caption if message.caption else "Rasmni batafsil tahlil qilib, tushuntirib ber."
+
+    try:
+        with open(file_path, "rb") as img_file:
+            img_bytes = img_file.read()
+
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                genai_types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+                f"You are a helpful AI assistant. Always reply in the user's language. Prompt: {caption}"
+            ]
+        )
+        await status_msg.edit_text(response.text)
+    except Exception:
+        await status_msg.edit_text("❌ Rasmni tahlil qilishda xatolik yuz berdi.")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+@dp.message(F.voice)
+async def voice_handler(message: types.Message):
+    add_user(message.from_user.id)
+    status_msg = await message.answer("🎙 Ovoz tinglanmoqda va tahlil qilinmoqda...")
+    
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = f"voice_{message.from_user.id}.ogg"
+    await bot.download_file(file.file_path, file_path)
+
+    try:
+        with open(file_path, "rb") as audio_file:
+            audio_bytes = audio_file.read()
+
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                genai_types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg"),
+                "Listen to this audio carefully and answer the question/request in the same language."
+            ]
+        )
+        await status_msg.edit_text(f"🎙 <b>Sizning ovozingizga AI javobi:</b>\n\n{response.text}", parse_mode=ParseMode.HTML)
+    except Exception:
+        await status_msg.edit_text("❌ Ovozni qayta ishlashda xatolik yuz berdi.")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+@dp.message(F.text)
+async def main_handler(message: types.Message):
+    add_user(message.from_user.id)
+    text = message.text.strip()
+    
+    url_pattern = re.compile(r'https?://[^\s]+')
+    urls = url_pattern.findall(text)
+
+    if urls:
+        url = urls[0]
+        status_msg = await message.answer("📥 Video yuklanmoqda, biroz kuting...")
+        file_prefix = f"video_{message.from_user.id}"
+        
+        try:
+            loop = asyncio.get_event_loop()
+            final_file = await loop.run_in_executor(None, download_media, url, False, file_prefix)
+            
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎵 MP3 formatda yuklash", callback_data=f"dl_mp3:{url}")]
+            ])
+            
+            video = FSInputFile(final_file)
+            await message.answer_video(video=video, caption="✅ Videongiz tayyor!", reply_markup=kb)
+            await status_msg.delete()
+            
+            if os.path.exists(final_file):
+                os.remove(final_file)
+            return
+        except Exception:
+            if os.path.exists(f"{file_prefix}.mp4"):
+                os.remove(f"{file_prefix}.mp4")
+            await status_msg.edit_text("❌ Ushbu havoladan videoni yuklab bo'lmadi yoki fayl hajmi juda katta (50MB+).")
+            return
+
+    try:
+        response_text = await generate_ai_response(message.from_user.id, text)
+        await message.answer(response_text)
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        logging.error(f"Chat error: {error_trace}")
+        
+        full_err_text = f"{str(e)} {repr(e)} {error_trace}".upper()
+        
+        if any(keyword in full_err_text for keyword in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "QUOTA", "RATE_LIMIT"]):
+            await message.answer("⏳ Serverlarda yuklama yuqori. 1 daqiqadan so'ng qayta urinib ko'ring.")
+            return
+
+        status_msg = await message.answer("⚠️ Botda xatolik aniqlandi. Auto-Fix ishga tushdi...")
+        fixed = await auto_fix_and_push(error_trace)
+        
+        if fixed:
+            await status_msg.edit_text("🔄 Kod avtomatik tuzatildi va GitHub'ga saqlandi! Render qayta yuklanmoqda...")
+        else:
+            await status_msg.edit_text("⚠️ Serverda vaqtincha xatolik. Birozdan so'ng urinib ko'ring.")
+
+async def main():
+    await start_dummy_server()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
