@@ -85,7 +85,6 @@ async def generate_ai_response(user_id: int, prompt: str) -> str:
     selected_model = get_user_model(user_id)
     system_prompt = "You are a helpful AI assistant. Always reply in the user's language (Uzbek, Russian, or English)."
 
-    # CLAUDE MODELS
     if "claude" in selected_model and claude_client:
         try:
             model_name = "claude-sonnet-5" if selected_model == "claude-sonnet" else "claude-haiku-4-5-20251001"
@@ -99,7 +98,6 @@ async def generate_ai_response(user_id: int, prompt: str) -> str:
         except Exception as e:
             logging.error(f"Claude Error: {e}. Fallback to Gemini.")
 
-    # GEMINI FALLBACK / DEFAULT
     if ai_client:
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
