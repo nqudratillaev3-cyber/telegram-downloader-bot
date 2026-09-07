@@ -3,18 +3,23 @@ import logging
 import os
 import re
 import urllib.parse
-import traceback
 import sqlite3
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
-from aiogram.types import FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    FSInputFile, 
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton
+)
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
 from google import genai
 from google.genai import types as genai_types
 import anthropic
-import github
-from github import Github
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -23,14 +28,17 @@ logging.basicConfig(level=logging.INFO)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-GITHUB_REPO = os.getenv("GITHUB_REPO")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# AI Clientlarni sozlash
+# FSM holatlari (Tugmalar bosilganda matn kiritishni kutish uchun)
+class BotStates(StatesGroup):
+    waiting_for_music = State()
+    waiting_for_image = State()
+
+# AI Clientlarini sozlash
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY) if CLAUDE_API_KEY else None
 
@@ -67,7 +75,18 @@ def get_all_users():
     cursor.execute("SELECT user_id FROM users")
     return [row[0] for row in cursor.fetchall()]
 
-# --- PORT SERVER ---
+# --- ASOSIY REPLUY TUGMALAR (MAIN MENU) ---
+def get_main_keyboard(user_id: int):
+    buttons = [
+        [KeyboardButton(text="🤖 AI Modelni Tanlash"), KeyboardButton(text="🎧 Musiqa Qidirish")],
+        [KeyboardButton(text="🎨 Rasm Yaratish (AI Image)"), KeyboardButton(text="ℹ️ Yordam")]
+    ]
+    if user_id == ADMIN_ID:
+        buttons.append([KeyboardButton(text="📊 Statistika")])
+        
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+# --- PORT SERVER (RENDER UCHUN) ---
 async def handle(request):
     return web.Response(text="Bot ishlamoqda!")
 
@@ -80,14 +99,14 @@ async def start_dummy_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-# --- CLAUDE VA GEMINI CHAT FUNKSIYASI ---
+# --- AI JAVOB GENERATORI ---
 async def generate_ai_response(user_id: int, prompt: str) -> str:
     selected_model = get_user_model(user_id)
     system_prompt = "You are a helpful AI assistant. Always reply in the user's language (Uzbek, Russian, or English)."
 
     if "claude" in selected_model and claude_client:
         try:
-            model_name = "claude-sonnet-5" if selected_model == "claude-sonnet" else "claude-haiku-4-5-20251001"
+            model_name = "claude-3-5-sonnet-20241022" if selected_model == "claude-sonnet" else "claude-3-haiku-20240307"
             response = claude_client.messages.create(
                 model=model_name,
                 max_tokens=1500,
@@ -99,71 +118,17 @@ async def generate_ai_response(user_id: int, prompt: str) -> str:
             logging.error(f"Claude Error: {e}. Fallback to Gemini.")
 
     if ai_client:
-        response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=f"{system_prompt}\n\nUser: {prompt}"
-        )
-        return response.text
-    
-    return "❌ AI xizmatida vaqtincha xatolik yuz berdi."
-
-# --- AUTO-HEALING ENGINE (CLAUDE SONNET) ---
-async def auto_fix_and_push(error_message: str):
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        return False
-
-    err_str = str(error_message).upper()
-    if any(k in err_str for k in ["RESOURCE_EXHAUSTED", "429", "503", "UNAVAILABLE", "404", "QUOTA"]):
-        return False
-
-    try:
-        g = Github(auth=github.Auth.Token(GITHUB_TOKEN)) if hasattr(github, 'Auth') else Github(GITHUB_TOKEN)
-        repo = g.get_repo(GITHUB_REPO)
-        contents = repo.get_contents("main.py")
-        current_code = contents.decoded_content.decode("utf-8")
-
-        prompt = f"""
-You are an expert Python developer. Fix this code error in an aiogram 3 bot:
-
-ERROR:
-{error_message}
-
-CODE:
-{current_code}
-
-Return ONLY valid raw Python code without markdown blocks or explanations.
-"""
-
-        if claude_client:
-            res = claude_client.messages.create(
-                model="claude-sonnet-5",
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            fixed_code = res.content[0].text.strip()
-        elif ai_client:
-            res = ai_client.models.generate_content(
+        try:
+            response = ai_client.models.generate_content(
                 model='gemini-2.5-flash',
-                contents=prompt,
+                contents=f"{system_prompt}\n\nUser: {prompt}"
             )
-            fixed_code = res.text.strip()
-        else:
-            return False
-
-        match = re.search(r"```python\s*(.*?)\s*```", fixed_code, re.DOTALL)
-        if match:
-            fixed_code = match.group(1).strip()
-
-        repo.update_file(
-            path=contents.path,
-            message="🤖 Auto-Fix: Claude orqali koddagi xato avtomatik tuzatildi",
-            content=fixed_code,
-            sha=contents.sha
-        )
-        return True
-    except Exception as e:
-        logging.error(f"Auto-Fix error: {e}")
-        return False
+            return response.text
+        except Exception as e:
+            logging.error(f"Gemini Error: {e}")
+            return "⚠️ AI serverida xatolik yuz berdi. Birozdan so'ng qayta urinib ko'ring."
+    
+    return "❌ AI xizmati ulanmagan."
 
 # --- YUKLAB OLISH FUNKSIYALARI ---
 def download_media(url: str, is_audio: bool = False, output_path: str = "downloaded_file"):
@@ -217,25 +182,20 @@ def search_youtube_music(query: str, limit: int = 5):
                     })
         return results
 
-# --- HANDLERLAR ---
+# --- COMMAND VA HANDLERLAR ---
 
 @dp.message(Command("start"))
-async def start_handler(message: types.Message):
+async def start_handler(message: types.Message, state: FSMContext):
+    await state.clear()
     add_user(message.from_user.id)
     welcome_text = (
-        "<b>Salom! Men sizning ko'p funktsiyali Multi-AI yordamchingiz va Downloader botingizman.</b>\n\n"
-        "✨ <b>Imkoniyatlar:</b>\n"
-        "• 🧠 AI Modelni tanlash: <code>/model</code>\n"
-        "• 🎧 Qo'shiq izlash: <code>/music &lt;nomi&gt;</code>\n"
-        "• 🎥 Video / 🎵 MP3 yuklash (YouTube, Instagram, TikTok havolasi)\n"
-        "• 🎙 Ovozli xabarlarni tushunish va AI javobi\n"
-        "• 🖼 Rasmlarni tahlil qilish (Vision AI)\n"
-        "• 🎨 Rasm generatsiyasi: <code>/image &lt;tavsif&gt;</code>\n"
-        "• 💬 AI Chat (O'zbek, Rus, Ingliz tillarida)\n\n"
-        "Shunchaki havola, matn, rasm yoki ovozli xabar yuboring!"
+        "<b>Salom! Men sizning ko'p funktsiyali AI yordamchingiz va Downloader botingizman.</b>\n\n"
+        "👇 Pastdagi tugmalar orqali bot imkoniyatlaridan tezkor foydalanishingiz mumkin:"
     )
-    await message.answer(welcome_text, parse_mode=ParseMode.HTML)
+    await message.answer(welcome_text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard(message.from_user.id))
 
+# TUGMALAR HANDLERLARI
+@dp.message(F.text == "🤖 AI Modelni Tanlash")
 @dp.message(Command("model"))
 async def model_command_handler(message: types.Message):
     add_user(message.from_user.id)
@@ -248,7 +208,7 @@ async def model_command_handler(message: types.Message):
     ])
     await message.answer(
         f"⚙️ <b>Sizning joriy AI modelingiz:</b> <code>{current_m.upper()}</code>\n\n"
-        f"Muloqot qilish uchun quyidagi AI modellaridan birini tanlang:",
+        f"Muloqot qilish uchun kerakli AI modelini tanlang:",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
@@ -257,16 +217,17 @@ async def model_command_handler(message: types.Message):
 async def callback_set_model(callback: types.CallbackQuery):
     selected = callback.data.split("set_model:", 1)[1]
     set_user_model(callback.from_user.id, selected)
-    await callback.message.edit_text(f"✅ Muvaffaqiyatli saqlandi! Endi bot **{selected.upper()}** orqali javob beradi.", parse_mode=ParseMode.MARKDOWN)
+    await callback.message.edit_text(f"✅ Muvaffaqiyatli saqlandi! Endi bot <b>{selected.upper()}</b> orqali javob beradi.", parse_mode=ParseMode.HTML)
 
-@dp.message(Command("music"))
-async def music_search_handler(message: types.Message):
-    add_user(message.from_user.id)
-    query = message.text.replace("/music", "").strip()
-    if not query:
-        await message.answer("⚠️ Qo'shiq nomini yoki ijrochini kiriting:\nMasalan: <code>/music Janob Rasul</code>", parse_mode=ParseMode.HTML)
-        return
+@dp.message(F.text == "🎧 Musiqa Qidirish")
+async def music_btn_handler(message: types.Message, state: FSMContext):
+    await state.set_state(BotStates.waiting_for_music)
+    await message.answer("🎵 Qidirmoqchi bo'lgan qo'shigingiz nomini yoki ijrochini kiriting:\n<i>(Masalan: Janob Rasul)</i>", parse_mode=ParseMode.HTML)
 
+@dp.message(BotStates.waiting_for_music)
+async def process_music_search(message: types.Message, state: FSMContext):
+    await state.clear()
+    query = message.text.strip()
     status_msg = await message.answer("🔍 Qo'shiqlar qidirilmoqda...")
     
     try:
@@ -287,45 +248,15 @@ async def music_search_handler(message: types.Message):
     except Exception:
         await status_msg.edit_text("❌ Musiqa qidirishda xatolik yuz berdi.")
 
-@dp.message(Command("stats"))
-async def stats_handler(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    total = get_total_users()
-    await message.answer(f"📊 <b>Bot Statistikasi:</b>\n\n👥 Jami foydalanuvchilar: <b>{total}</b> ta", parse_mode=ParseMode.HTML)
+@dp.message(F.text == "🎨 Rasm Yaratish (AI Image)")
+async def image_btn_handler(message: types.Message, state: FSMContext):
+    await state.set_state(BotStates.waiting_for_image)
+    await message.answer("🖼 Qanday rasm yaratmoqchisiz? Tavsifini kiriting:\n<i>(Masalan: space sunset, cyber city)</i>", parse_mode=ParseMode.HTML)
 
-@dp.message(Command("send"))
-async def broadcast_handler(message: types.Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    text_to_send = message.text.replace("/send", "").strip()
-    if not text_to_send:
-        await message.answer("⚠️ Yuboriladigan matnni kiriting: <code>/send Salom hammaga!</code>", parse_mode=ParseMode.HTML)
-        return
-
-    users = get_all_users()
-    count = 0
-    await message.answer(f"📢 {len(users)} ta foydalanuvchiga xabar yuborilmoqda...")
-    
-    for uid in users:
-        try:
-            await bot.send_message(chat_id=uid, text=text_to_send)
-            count += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
-
-    await message.answer(f"✅ Xabar {count} ta foydalanuvchiga muvaffaqiyatli yetkazildi!")
-
-@dp.message(Command("image"))
-async def image_handler(message: types.Message):
-    add_user(message.from_user.id)
-    prompt = message.text.replace("/image", "").strip()
-    if not prompt:
-        await message.answer("⚠️ Tavsif kiriting: <code>/image space sunset</code>", parse_mode=ParseMode.HTML)
-        return
-
+@dp.message(BotStates.waiting_for_image)
+async def process_image_gen(message: types.Message, state: FSMContext):
+    await state.clear()
+    prompt = message.text.strip()
     await message.answer("🎨 Rasm tayyorlanmoqda...")
     encoded_prompt = urllib.parse.quote(prompt)
     image_url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&seed=42"
@@ -334,6 +265,24 @@ async def image_handler(message: types.Message):
         await message.answer_photo(photo=image_url, caption=f"🖼 <b>Natija:</b> {prompt}", parse_mode=ParseMode.HTML)
     except Exception:
         await message.answer("❌ Rasm yaratishda xatolik yuz berdi.")
+
+@dp.message(F.text == "ℹ️ Yordam")
+async def help_btn_handler(message: types.Message):
+    help_text = (
+        "<b>Botdan foydalanish yo'riqnomasi:</b>\n\n"
+        "• 💬 <b>AI Chat:</b> Istalgan matnli xabaringizga AI javob beradi.\n"
+        "• 🎥 <b>Video yuklash:</b> Instagram, TikTok yoki YouTube havolasini yuboring.\n"
+        "• 🎙 <b>Ovozli xabar:</b> Ovozli xabar yuborsangiz, AI uni tushunib javob qaytaradi.\n"
+        "• 🖼 <b>Rasm Tahlili:</b> Botingizga rasm yuborsangiz, uni tahlil qilib beradi."
+    )
+    await message.answer(help_text, parse_mode=ParseMode.HTML)
+
+@dp.message(F.text == "📊 Statistika")
+async def stats_handler(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    total = get_total_users()
+    await message.answer(f"📊 <b>Bot Statistikasi:</b>\n\n👥 Jami foydalanuvchilar: <b>{total}</b> ta", parse_mode=ParseMode.HTML)
 
 @dp.callback_query(F.data.startswith("dl_mp3:"))
 async def callback_dl_mp3(callback: types.CallbackQuery):
@@ -411,6 +360,7 @@ async def voice_handler(message: types.Message):
         if os.path.exists(file_path):
             os.remove(file_path)
 
+# --- ASOSIY MATN HANDLERI (AI CHAT VA HAVOLALAR) ---
 @dp.message(F.text)
 async def main_handler(message: types.Message):
     add_user(message.from_user.id)
@@ -419,6 +369,7 @@ async def main_handler(message: types.Message):
     url_pattern = re.compile(r'https?://[^\s]+')
     urls = url_pattern.findall(text)
 
+    # Havola bo'lsa - media yuklab beradi
     if urls:
         url = urls[0]
         status_msg = await message.answer("📥 Video yuklanmoqda, biroz kuting...")
@@ -445,26 +396,13 @@ async def main_handler(message: types.Message):
             await status_msg.edit_text("❌ Ushbu havoladan videoni yuklab bo'lmadi yoki fayl hajmi juda katta (50MB+).")
             return
 
+    # Oddiy matn bo'lsa - AI javob qaytaradi
     try:
         response_text = await generate_ai_response(message.from_user.id, text)
         await message.answer(response_text)
     except Exception as e:
-        error_trace = traceback.format_exc()
-        logging.error(f"Chat error: {error_trace}")
-        
-        full_err_text = f"{str(e)} {repr(e)} {error_trace}".upper()
-        
-        if any(keyword in full_err_text for keyword in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "QUOTA", "RATE_LIMIT"]):
-            await message.answer("⏳ Serverlarda yuklama yuqori. 1 daqiqadan so'ng qayta urinib ko'ring.")
-            return
-
-        status_msg = await message.answer("⚠️ Botda xatolik aniqlandi. Auto-Fix ishga tushdi...")
-        fixed = await auto_fix_and_push(error_trace)
-        
-        if fixed:
-            await status_msg.edit_text("🔄 Kod avtomatik tuzatildi va GitHub'ga saqlandi! Render qayta yuklanmoqda...")
-        else:
-            await status_msg.edit_text("⚠️ Serverda vaqtincha xatolik. Birozdan so'ng urinib ko'ring.")
+        logging.error(f"Chat error: {e}")
+        await message.answer("⚠️ Vaqtincha xatolik yuz berdi. Birozdan so'ng qayta urinib ko'ring.")
 
 async def main():
     await start_dummy_server()
