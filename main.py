@@ -36,9 +36,9 @@ class BotStates(StatesGroup):
     waiting_for_music = State()
     waiting_for_image = State()
 
-# 100% BEPUL Gemini Client
+# 100% BEPUL Gemini Client va To'g'ri Model Nomlanishi
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "models/gemini-1.5-flash"  # 404 Xatosini oldini olish uchun 'models/' qoshildi
 
 # --- BAZA (SQLITE) STATISTIKA ---
 conn = sqlite3.connect("bot_data.db", check_same_thread=False)
@@ -101,11 +101,18 @@ async def generate_ai_response(user_id: int, prompt: str) -> str:
 
 # --- YUKLAB OLISH FUNKSIYALARI ---
 def download_media(url: str, is_audio: bool = False, output_path: str = "downloaded_file"):
+    # HTTP 429 xatosini oldini olish uchun User-Agent qo'shildi
     common_opts = {
         'quiet': True,
         'no_warnings': True,
         'max_filesize': 50 * 1024 * 1024,
-        'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        'extractor_args': {
+            'youtube': {'player_client': ['android', 'web']},
+            'instagram': {'max_comments': 0}
+        },
     }
     
     if is_audio:
