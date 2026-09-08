@@ -19,7 +19,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
 from google import genai
 from google.genai import types as genai_types
-import anthropic
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -27,59 +26,43 @@ logging.basicConfig(level=logging.INFO)
 # --- ENVIRONMENT VARIABLES ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# FSM holatlari (Tugmalar bosilganda matn kiritishni kutish uchun)
+# FSM holatlari
 class BotStates(StatesGroup):
     waiting_for_music = State()
     waiting_for_image = State()
 
-# AI Clientlarini sozlash
+# 100% BEPUL Gemini Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY) if CLAUDE_API_KEY else None
+GEMINI_MODEL = "gemini-1.5-flash"
 
-# --- BAZA (SQLITE) STATISTIKA VA MODEL SOZLAMALARI ---
+# --- BAZA (SQLITE) STATISTIKA ---
 conn = sqlite3.connect("bot_data.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        selected_model TEXT DEFAULT 'gemini'
+        user_id INTEGER PRIMARY KEY
     )
 """)
 conn.commit()
 
 def add_user(user_id: int):
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, selected_model) VALUES (?, 'gemini')", (user_id,))
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
     conn.commit()
-
-def set_user_model(user_id: int, model_name: str):
-    add_user(user_id)
-    cursor.execute("UPDATE users SET selected_model = ? WHERE user_id = ?", (model_name, user_id))
-    conn.commit()
-
-def get_user_model(user_id: int) -> str:
-    cursor.execute("SELECT selected_model FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    return row[0] if row and row[0] else "gemini"
 
 def get_total_users():
     cursor.execute("SELECT COUNT(*) FROM users")
     return cursor.fetchone()[0]
 
-def get_all_users():
-    cursor.execute("SELECT user_id FROM users")
-    return [row[0] for row in cursor.fetchall()]
-
 # --- ASOSIY REPLUY TUGMALAR (MAIN MENU) ---
 def get_main_keyboard(user_id: int):
     buttons = [
-        [KeyboardButton(text="🤖 AI Modelni Tanlash"), KeyboardButton(text="🎧 Musiqa Qidirish")],
-        [KeyboardButton(text="🎨 Rasm Yaratish (AI Image)"), KeyboardButton(text="ℹ️ Yordam")]
+        [KeyboardButton(text="🎧 Musiqa Qidirish"), KeyboardButton(text="🎨 Rasm Yaratish (AI Image)")],
+        [KeyboardButton(text="ℹ️ Yordam")]
     ]
     if user_id == ADMIN_ID:
         buttons.append([KeyboardButton(text="📊 Statistika")])
@@ -99,28 +82,14 @@ async def start_dummy_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-# --- AI JAVOB GENERATORI ---
+# --- AI JAVOB GENERATORI (100% BEPUL GEMINI) ---
 async def generate_ai_response(user_id: int, prompt: str) -> str:
-    selected_model = get_user_model(user_id)
     system_prompt = "You are a helpful AI assistant. Always reply in the user's language (Uzbek, Russian, or English)."
-
-    if "claude" in selected_model and claude_client:
-        try:
-            model_name = "claude-3-5-sonnet-20241022" if selected_model == "claude-sonnet" else "claude-3-haiku-20240307"
-            response = claude_client.messages.create(
-                model=model_name,
-                max_tokens=1500,
-                system=system_prompt,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.content[0].text
-        except Exception as e:
-            logging.error(f"Claude Error: {e}. Fallback to Gemini.")
 
     if ai_client:
         try:
             response = ai_client.models.generate_content(
-                model='gemini-2.5-flash',
+                model=GEMINI_MODEL,
                 contents=f"{system_prompt}\n\nUser: {prompt}"
             )
             return response.text
@@ -190,34 +159,11 @@ async def start_handler(message: types.Message, state: FSMContext):
     add_user(message.from_user.id)
     welcome_text = (
         "<b>Salom! Men sizning ko'p funktsiyali AI yordamchingiz va Downloader botingizman.</b>\n\n"
-        "👇 Pastdagi tugmalar orqali bot imkoniyatlaridan tezkor foydalanishingiz mumkin:"
+        "• 📥 <b>Social Media Downloader:</b> Instagram, TikTok yoki YouTube havolasini yuboring.\n"
+        "• 💬 <b>AI Chat:</b> Istalgan matn, rasm yoki ovozli xabarga javob beraman.\n\n"
+        "Pastdagi tugmalar orqali qo'shimcha imkoniyatlardan foydalaning 👇"
     )
     await message.answer(welcome_text, parse_mode=ParseMode.HTML, reply_markup=get_main_keyboard(message.from_user.id))
-
-# TUGMALAR HANDLERLARI
-@dp.message(F.text == "🤖 AI Modelni Tanlash")
-@dp.message(Command("model"))
-async def model_command_handler(message: types.Message):
-    add_user(message.from_user.id)
-    current_m = get_user_model(message.from_user.id)
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚡ Gemini Flash (Tezkor)", callback_data="set_model:gemini")],
-        [InlineKeyboardButton(text="🧠 Claude Haiku (Aqlli)", callback_data="set_model:claude-haiku")],
-        [InlineKeyboardButton(text="🚀 Claude Sonnet (Ultra-Aql)", callback_data="set_model:claude-sonnet")]
-    ])
-    await message.answer(
-        f"⚙️ <b>Sizning joriy AI modelingiz:</b> <code>{current_m.upper()}</code>\n\n"
-        f"Muloqot qilish uchun kerakli AI modelini tanlang:",
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
-    )
-
-@dp.callback_query(F.data.startswith("set_model:"))
-async def callback_set_model(callback: types.CallbackQuery):
-    selected = callback.data.split("set_model:", 1)[1]
-    set_user_model(callback.from_user.id, selected)
-    await callback.message.edit_text(f"✅ Muvaffaqiyatli saqlandi! Endi bot <b>{selected.upper()}</b> orqali javob beradi.", parse_mode=ParseMode.HTML)
 
 @dp.message(F.text == "🎧 Musiqa Qidirish")
 async def music_btn_handler(message: types.Message, state: FSMContext):
@@ -319,7 +265,7 @@ async def photo_analysis_handler(message: types.Message):
             img_bytes = img_file.read()
 
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model=GEMINI_MODEL,
             contents=[
                 genai_types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
                 f"You are a helpful AI assistant. Always reply in the user's language. Prompt: {caption}"
@@ -347,7 +293,7 @@ async def voice_handler(message: types.Message):
             audio_bytes = audio_file.read()
 
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model=GEMINI_MODEL,
             contents=[
                 genai_types.Part.from_bytes(data=audio_bytes, mime_type="audio/ogg"),
                 "Listen to this audio carefully and answer the question/request in the same language."
@@ -360,7 +306,7 @@ async def voice_handler(message: types.Message):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# --- ASOSIY MATN HANDLERI (AI CHAT VA HAVOLALAR) ---
+# --- ASOSIY MATN HANDLERI (MEDIA DOWNLOADING VA AI CHAT) ---
 @dp.message(F.text)
 async def main_handler(message: types.Message):
     add_user(message.from_user.id)
@@ -396,7 +342,7 @@ async def main_handler(message: types.Message):
             await status_msg.edit_text("❌ Ushbu havoladan videoni yuklab bo'lmadi yoki fayl hajmi juda katta (50MB+).")
             return
 
-    # Oddiy matn bo'lsa - AI javob qaytaradi
+    # Oddiy matn bo'lsa - Gemini AI javob beradi
     try:
         response_text = await generate_ai_response(message.from_user.id, text)
         await message.answer(response_text)
