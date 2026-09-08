@@ -4,5 +4,4 @@ aiohttp
 httpx
 yt-dlp>=2024.12.23
 requests
-PyGithub
-anthropic
+PyGitHub
